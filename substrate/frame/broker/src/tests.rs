@@ -215,8 +215,13 @@ fn provisional_is_reassignable() {
 		assert_ok!(Broker::do_start_sales(100, 1));
 		advance_to(2);
 		let region = Broker::do_purchase(1, u64::max_value()).unwrap();
+		//println!("{:?}", region);
 		assert_ok!(Broker::do_assign(region, Some(1), 1001, Provisional));
 		let (region1, region) = Broker::do_partition(region, Some(1), 1).unwrap();
+		//assert_eq!(Regions::<Test>::get(region1), Some(RegionRecord { end: 5, owner: 1, paid:
+		// None })); println!("{:?}", region);
+		//println!("{:?}", region1);
+		//let (region4, region5) = Broker::do_partition(region1, Some(1), 2).unwrap();
 		let (region2, region3) =
 			Broker::do_interlace(region, Some(1), CoreMask::from_chunk(0, 40)).unwrap();
 		assert_ok!(Broker::do_pool(region1, Some(1), 1, Provisional));
@@ -491,13 +496,19 @@ fn partition_works() {
 	TestExt::new().endow(1, 1000).execute_with(|| {
 		assert_ok!(Broker::do_start_sales(100, 1));
 		advance_to(2);
+
 		let region = Broker::do_purchase(1, u64::max_value()).unwrap();
-		let (region1, region) = Broker::do_partition(region, None, 1).unwrap();
-		let (region2, region3) = Broker::do_partition(region, None, 1).unwrap();
-		assert_ok!(Broker::do_assign(region1, None, 1001, Final));
-		assert_ok!(Broker::do_assign(region2, None, 1002, Final));
-		assert_ok!(Broker::do_assign(region3, None, 1003, Final));
-		advance_to(10);
+		println!("region: {}", region.mask);
+
+		assert_ok!(Broker::do_assign(region, None, 1001, Final));
+
+		// The duration of one region is 3 timeslices, where timeslice is equal to 2 blocks.
+		//
+		// This means that the next regions starts at block 8 since the previous started at block 2.
+		//
+		// This means that the tasks for the new region will be assigned at 6 since the 
+		// notice period is 2 blocks, meaning tasks need to be announced 2 blocks before start.
+		advance_to(6);
 		assert_eq!(
 			CoretimeTrace::get(),
 			vec![
@@ -506,31 +517,95 @@ fn partition_works() {
 					AssignCore {
 						core: 0,
 						begin: 8,
-						assignment: vec![(Task(1001), 57600),],
-						end_hint: None
-					}
-				),
-				(
-					8,
-					AssignCore {
-						core: 0,
-						begin: 10,
-						assignment: vec![(Task(1002), 57600),],
-						end_hint: None
-					}
-				),
-				(
-					10,
-					AssignCore {
-						core: 0,
-						begin: 12,
-						assignment: vec![(Task(1003), 57600),],
+						assignment: vec![(Task(1001), 57600)],
 						end_hint: None
 					}
 				),
 			]
 		);
 	});
+
+	TestExt::new().endow(1, 1000).execute_with(|| {
+		println!("\n");
+		assert_ok!(Broker::do_start_sales(100, 1));
+		advance_to(2);
+
+		let region = Broker::do_purchase(1, u64::max_value()).unwrap();
+
+		// The pivot specifies the timeslice at which the two new regions will be split.
+		let (region1, region2) = Broker::do_partition(region, None, 2).unwrap();
+
+		println!("region1: {}", region1.mask);
+		println!("region2: {}", region2.mask);
+
+		assert_ok!(Broker::do_assign(region1, None, 1001, Final));
+		assert_ok!(Broker::do_assign(region2, None, 1002, Final));
+
+		// The next timeslice starts at block 8.
+
+		// NOTE: things in the workload are set in advance. This is determined by the
+		// value of `advance_notice`.
+
+		advance_to(6);
+		assert_eq!(
+			Workload::<Test>::get(0),
+			vec![ ScheduleItem { mask: region1.mask, assignment: Task(1001) } ]
+		);
+
+		advance_to(10);
+		assert_eq!(
+			Workload::<Test>::get(0),
+			vec![ ScheduleItem { mask: region2.mask, assignment: Task(1002) } ]
+		);
+	});
+
+	TestExt::new().endow(1, 1000).execute_with(|| {
+		println!("\n");
+		assert_ok!(Broker::do_start_sales(100, 1));
+		advance_to(2);
+
+		let region = Broker::do_purchase(1, u64::max_value()).unwrap();
+
+		// The pivot specifies the timeslice at which the two new regions will be split.
+		let (region1, region2) = Broker::do_partition(region, None, 1).unwrap();
+		let (region2, region3) = Broker::do_partition(region2, None, 1).unwrap();
+
+		println!("region1: {}", region1.mask);
+		println!("region2: {}", region2.mask);
+		println!("region3: {}", region3.mask);
+
+		assert_ok!(Broker::do_assign(region1, None, 1001, Final));
+		assert_ok!(Broker::do_assign(region2, None, 1002, Final));
+		assert_ok!(Broker::do_assign(region3, None, 1003, Final));
+
+		// The next timeslice starts at block 6.
+
+		advance_to(6);
+		assert_eq!(
+			Workload::<Test>::get(0),
+			vec![ ScheduleItem { mask: region1.mask, assignment: Task(1001) } ]
+		);
+
+		advance_to(8);
+		assert_eq!(
+			Workload::<Test>::get(0),
+			vec![ ScheduleItem { mask: region2.mask, assignment: Task(1002) } ]
+		);
+
+		advance_to(10);
+		assert_eq!(
+			Workload::<Test>::get(0),
+			vec![ ScheduleItem { mask: region2.mask, assignment: Task(1003) } ]
+		);
+	});
+
+	// Conclusion: The number of partitioning one can do on a region is limited by the 
+	// length of the timeslices that a region lasts.
+	//
+	// If region length is 3 timeslices this mean that the region can be partitioned
+	// at most into 3 non-overlapping regions.
+
+	// Takeaway: Partitioning doesn't split a block, it splits a region.
 }
 
 #[test]
@@ -546,19 +621,29 @@ fn interlace_works() {
 		assert_ok!(Broker::do_assign(region1, None, 1001, Final));
 		assert_ok!(Broker::do_assign(region2, None, 1002, Final));
 		assert_ok!(Broker::do_assign(region3, None, 1003, Final));
-		advance_to(10);
+
+		// The next region starts at block 8.
+
+		// NOTE: things in the workload are set in advance. This is determined by the
+		// value of `advance_notice`.
+
+		advance_to(6);	
 		assert_eq!(
-			CoretimeTrace::get(),
-			vec![(
-				6,
-				AssignCore {
-					core: 0,
-					begin: 8,
-					assignment: vec![(Task(1001), 21600), (Task(1002), 21600), (Task(1003), 14400),],
-					end_hint: None
-				}
-			),]
+			Workload::<Test>::get(0),
+			vec![ 
+				ScheduleItem { mask: region1.mask, assignment: Task(1001) },
+				ScheduleItem { mask: region2.mask, assignment: Task(1002) },
+				ScheduleItem { mask: region3.mask, assignment: Task(1003) },
+			]
 		);
+
+		// Conclusion: Interlacing is the operation that actually allows splitting a
+		// timeslice into smaller parts.
+		//
+		// A timeslice can be split at most into 1/80th parts.
+		//
+		// This can actually make it possible to put multiple smaller blocks into one
+		// relay block.
 	});
 }
 

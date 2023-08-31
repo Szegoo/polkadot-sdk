@@ -505,6 +505,8 @@ pub mod pallet {
 
 		/// Reserve a core for a workload.
 		///
+		/// NOTE: this is gonna be used for the system parachains.
+		///
 		/// - `origin`: Must be Root or pass `AdminOrigin`.
 		/// - `workload`: The workload which should be permanently placed on a core.
 		#[pallet::call_index(1)]
@@ -533,6 +535,8 @@ pub mod pallet {
 		/// In the interlude and sale period where Bulk Coretime is sold for the period immediately
 		/// after `until`, then the same workload may be renewed.
 		///
+		/// NOTE: this is used for legacy parachain lease support.
+		///
 		/// - `origin`: Must be Root or pass `AdminOrigin`.
 		/// - `task`: The workload which should be placed on a core.
 		/// - `until`: The timeslice now earlier than which `task` should be placed as a workload on
@@ -549,6 +553,9 @@ pub mod pallet {
 		}
 
 		/// Begin the Bulk Coretime sales rotation.
+		///
+		/// Force start a new bulk period. This is otherwise done automatically during
+		/// `on_initialize`.
 		///
 		/// - `origin`: Must be Root or pass `AdminOrigin`.
 		/// - `initial_price`: The price of Bulk Coretime in the first sale.

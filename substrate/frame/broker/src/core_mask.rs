@@ -16,7 +16,10 @@
 // limitations under the License.
 
 use codec::{Decode, Encode, MaxEncodedLen};
-use core::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Not};
+use core::{
+	fmt::Display,
+	ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Not},
+};
 use scale_info::TypeInfo;
 use sp_core::RuntimeDebug;
 
@@ -132,6 +135,15 @@ impl Not for CoreMask {
 			result[i] = self.0[i].not();
 		}
 		Self(result)
+	}
+}
+
+impl Display for CoreMask {
+	fn fmt(&self, _f: &mut core::fmt::Formatter) -> core::fmt::Result {
+		self.0.into_iter().for_each(|section| {
+			print!("{:08b}", section);
+		});
+		Ok(())
 	}
 }
 

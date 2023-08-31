@@ -209,8 +209,8 @@ impl crate::Config for Test {
 	type Currency = ItemOf<TestFungibles<(), u64, (), ConstU64<0>, ()>, (), u64>;
 	type OnRevenue = IntoZero;
 	type TimeslicePeriod = ConstU32<2>;
-	// ^^ Makes sense since relay chain block duration is 6s and parachain block duration 
-	// is 12s.
+	// ^^ This means that there are two relay chain blocks in one timeslice.
+	// That is the timeslice is two relay chain blcoks.
 	type MaxLeasedCores = ConstU32<5>;
 	type MaxReservedCores = ConstU32<5>;
 	type Coretime = TestCoretimeProvider;
