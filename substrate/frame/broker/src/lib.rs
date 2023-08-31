@@ -122,14 +122,20 @@ pub mod pallet {
 	pub type Leases<T> = StorageValue<_, LeasesRecordOf<T>, ValueQuery>;
 
 	/// The current status of miscellaneous subsystems of this pallet.
+	///
+	/// Can be useful for dashboard.
 	#[pallet::storage]
 	pub type Status<T> = StorageValue<_, StatusRecord, OptionQuery>;
 
 	/// The details of the current sale, including its properties and status.
+	///
+	/// Very useful for dashboard.
 	#[pallet::storage]
 	pub type SaleInfo<T> = StorageValue<_, SaleInfoRecordOf<T>, OptionQuery>;
 
 	/// Records of allowed renewals.
+	///
+	/// Very useful for dashboard.
 	#[pallet::storage]
 	pub type AllowedRenewals<T> =
 		StorageMap<_, Twox64Concat, AllowedRenewalId, AllowedRenewalRecordOf<T>, OptionQuery>;

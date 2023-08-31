@@ -30,10 +30,23 @@ impl<T: Config> Pallet<T> {
 	///
 	/// This may do several things:
 	/// - Processes notifications of the core count changing
+	/// 	=> Update the bulk cores available for sale. 
+	///		i.e. update `configuration.limit_cores_offered`
+	///
 	/// - Processes reports of Instantaneous Core Market Revenue
+	///		=> Sets the payout of the contributors so that it can be claimed.
+	///
 	/// - Commit a timeslice
+	///		1. Update the `Workplan`
+	///		2. Set the current `Wokload`
+	///		TODO: There are porbably other things happening as well when commiting a timeslice
+	///
 	/// - Rotate the sale period
+	///		=> Begins the next sale period.
+	///
 	/// - Request revenue information for a previous timeslice
+	/// 	QUESTION: How is this different than the first point?
+	///
 	/// - Initialize an instantaneous core pool historical revenue record
 	pub(crate) fn do_tick() -> Weight {
 		let (mut status, config) = match (Status::<T>::get(), Configuration::<T>::get()) {

@@ -85,6 +85,8 @@ pub struct RegionRecord<AccountId, Balance> {
 	/// The owner of the Region.
 	pub owner: AccountId,
 	/// The amount paid to Polkadot for this Region, or `None` if renewal is not allowed.
+	///
+	/// QUESTION: Why `None` if renewal is not allowed.
 	pub paid: Option<Balance>,
 }
 pub type RegionRecordOf<T> = RegionRecord<<T as SConfig>::AccountId, BalanceOf<T>>;
@@ -255,6 +257,8 @@ pub type LeasesRecordOf<T> = LeasesRecord<<T as Config>::MaxLeasedCores>;
 pub struct ConfigRecord<BlockNumber, RelayBlockNumber> {
 	/// The number of Relay-chain blocks in advance which scheduling should be fixed and the
 	/// `Coretime::assign` API used to inform the Relay-chain.
+	///
+	/// QUESTION: What does this even mean?
 	pub advance_notice: RelayBlockNumber,
 	/// The length in blocks of the Interlude Period for forthcoming sales.
 	pub interlude_length: BlockNumber,
