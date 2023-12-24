@@ -15,13 +15,13 @@
 // along with Cumulus.  If not, see <http://www.gnu.org/licenses/>.
 
 use super::{
-	AccountId, AllPalletsWithSystem, Balances, BaseDeliveryFee, FeeAssetId, ParachainInfo,
+	AccountId, AllPalletsWithSystem, Balances, BaseDeliveryFee, Broker, FeeAssetId, ParachainInfo,
 	ParachainSystem, PolkadotXcm, Runtime, RuntimeCall, RuntimeEvent, RuntimeOrigin,
 	TransactionByteFee, WeightToFee, XcmpQueue,
 };
 use frame_support::{
 	match_types, parameter_types,
-	traits::{ConstU32, Contains, Equals, Everything, Nothing},
+	traits::{ConstU32, Contains, Equals, Everything, Nothing, PalletInfoAccess},
 };
 use frame_system::EnsureRoot;
 use pallet_xcm::XcmPassthrough;
@@ -42,13 +42,17 @@ use xcm_builder::CurrencyAdapter;
 use xcm_builder::{
 	AccountId32Aliases, AllowExplicitUnpaidExecutionFrom, AllowKnownQueryResponses,
 	AllowSubscriptionsFrom, AllowTopLevelPaidExecutionFrom, DenyReserveTransferToRelayChain,
-	DenyThenTry, EnsureXcmOrigin, IsConcrete, ParentAsSuperuser, ParentIsPreset,
-	RelayChainAsNative, SiblingParachainAsNative, SiblingParachainConvertsVia,
-	SignedAccountId32AsNative, SignedToAccountId32, SovereignSignedViaLocation, TakeWeightCredit,
+	DenyThenTry, EnsureXcmOrigin, IsConcrete, MatchedConvertedConcreteId, NoChecking,
+	NonFungiblesAdapter, ParentAsSuperuser, ParentIsPreset, RelayChainAsNative,
+	SiblingParachainAsNative, SiblingParachainConvertsVia, SignedAccountId32AsNative,
+	SignedToAccountId32, SovereignSignedViaLocation, StartsWith, TakeWeightCredit,
 	TrailingSetTopicAsId, UsingComponents, WeightInfoBounds, WithComputedOrigin, WithUniqueTopic,
-	XcmFeeManagerFromComponents, XcmFeeToAccount,
+	XcmFeeManagerFromComponents, XcmFeeToAccount, AsPrefixedGeneralIndex,
 };
-use xcm_executor::{traits::WithOriginFilter, XcmExecutor};
+use xcm_executor::{
+	traits::{JustTry, WithOriginFilter, MatchesNonFungibles, Error as MatchError},
+	XcmExecutor,
+};
 
 parameter_types! {
 	pub const RocRelayLocation: MultiLocation = MultiLocation::parent();
@@ -60,6 +64,9 @@ parameter_types! {
 	pub const MaxAssetsIntoHolding: u32 = 64;
 	pub const GovernanceLocation: MultiLocation = MultiLocation::parent();
 	pub const FellowshipLocation: MultiLocation = MultiLocation::parent();
+	pub BrokerPalletLocation: MultiLocation =
+		PalletInstance(<Broker as PalletInfoAccess>::index() as u8).into();
+	pub CheckingAccount: AccountId = PolkadotXcm::check_account();
 }
 
 /// Type for specifying how a `MultiLocation` can be converted into an `AccountId`. This is used
@@ -89,6 +96,55 @@ pub type CurrencyTransactor = CurrencyAdapter<
 	// We don't track any teleports of `Balances`.
 	(),
 >;
+
+/// `u128` encoded `RegionId`.
+type RegionId = u32;
+
+/// Means for transacting unique assets.
+pub type CoretimeTransactor = NonFungiblesAdapter<
+	// Use this non-fungibles implementation:
+	Broker,
+	// This adapter will handle Coretime regions.
+	MultiAssetToUniquesConverter,
+	// Convert an XCM MultiLocation into a local account id:
+	LocationToAccountId,
+	// Our chain's account ID type (we can't get away without mentioning it explicitly):
+	AccountId,
+	// We don't allow teleports.
+	NoChecking,
+	// The account to use for tracking teleports.
+	CheckingAccount,
+>;
+
+pub struct MultiAssetToUniquesConverter;
+impl MatchesNonFungibles<u32, RegionId> for MultiAssetToUniquesConverter {
+    fn matches_nonfungibles(a: &MultiAsset) -> Result<(u32, RegionId), MatchError> {
+        let (instance, class) = match (&a.fun, &a.id) {
+            (NonFungible(ref instance), Concrete(ref class)) => (instance, class),
+            _ => return Err(MatchError::AssetNotHandled),
+        };
+        let collection_id = Default::default();
+
+        let item_id = match instance {
+            Index(indx) => *indx,
+            _ => return Err(MatchError::AssetNotHandled),
+        };
+
+        Ok((collection_id, item_id.try_into().unwrap()))
+    }
+}
+
+/* TODO: Fixme
+type CoretimeConvertedConcreteId = MatchedConvertedConcreteId<
+	// There is only one collection, i.e. the Coretime regions.
+	u32,
+	RegionId,
+	StartsWith<BrokerPalletLocation>,
+	// Since there is only one collection there is no collection id converter.
+	AsPrefixedGeneralIndex<(), u32, JustTry>,
+	JustTry,
+>;
+*/
 
 /// This is the type we use to convert an (incoming) XCM origin into a local `Origin` instance,
 /// ready for dispatching a transaction with XCM's `Transact`. There is an `OriginKind` that can
@@ -201,11 +257,17 @@ pub type WaivedLocations = (
 	Equals<RelayTreasuryLocation>,
 );
 
+/// Means for transacting assets on this chain.
+pub type AssetTransactors = (
+	CurrencyTransactor,
+	CoretimeTransactor,
+);
+
 pub struct XcmConfig;
 impl xcm_executor::Config for XcmConfig {
 	type RuntimeCall = RuntimeCall;
 	type XcmSender = XcmRouter;
-	type AssetTransactor = CurrencyTransactor;
+	type AssetTransactor = AssetTransactors;
 	type OriginConverter = XcmOriginToTransactDispatchOrigin;
 	// Coretime chain does not recognize a reserve location for any asset. Users must teleport ROC
 	// where allowed (e.g. with the Relay Chain).
