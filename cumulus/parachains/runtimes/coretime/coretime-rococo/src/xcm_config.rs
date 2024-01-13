@@ -41,16 +41,16 @@ use xcm::latest::prelude::*;
 use xcm_builder::CurrencyAdapter;
 use xcm_builder::{
 	AccountId32Aliases, AllowExplicitUnpaidExecutionFrom, AllowKnownQueryResponses,
-	AllowSubscriptionsFrom, AllowTopLevelPaidExecutionFrom, DenyReserveTransferToRelayChain,
-	DenyThenTry, EnsureXcmOrigin, IsConcrete, MatchedConvertedConcreteId, NoChecking,
-	NonFungiblesAdapter, ParentAsSuperuser, ParentIsPreset, RelayChainAsNative,
-	SiblingParachainAsNative, SiblingParachainConvertsVia, SignedAccountId32AsNative,
-	SignedToAccountId32, SovereignSignedViaLocation, StartsWith, TakeWeightCredit,
-	TrailingSetTopicAsId, UsingComponents, WeightInfoBounds, WithComputedOrigin, WithUniqueTopic,
-	XcmFeeManagerFromComponents, XcmFeeToAccount, AsPrefixedGeneralIndex,
+	AllowSubscriptionsFrom, AllowTopLevelPaidExecutionFrom, AsPrefixedGeneralIndex,
+	DenyReserveTransferToRelayChain, DenyThenTry, EnsureXcmOrigin, IsConcrete,
+	MatchedConvertedConcreteId, NoChecking, NonFungiblesAdapter, ParentAsSuperuser, ParentIsPreset,
+	RelayChainAsNative, SiblingParachainAsNative, SiblingParachainConvertsVia,
+	SignedAccountId32AsNative, SignedToAccountId32, SovereignSignedViaLocation, StartsWith,
+	TakeWeightCredit, TrailingSetTopicAsId, UsingComponents, WeightInfoBounds, WithComputedOrigin,
+	WithUniqueTopic, XcmFeeManagerFromComponents, XcmFeeToAccount,
 };
 use xcm_executor::{
-	traits::{JustTry, WithOriginFilter, MatchesNonFungibles, Error as MatchError},
+	traits::{JustTry, WithOriginFilter},
 	XcmExecutor,
 };
 
@@ -105,7 +105,7 @@ pub type CoretimeTransactor = NonFungiblesAdapter<
 	// Use this non-fungibles implementation:
 	Broker,
 	// This adapter will handle Coretime regions.
-	MultiAssetToUniquesConverter,
+	CoretimeConvertedConcreteId,
 	// Convert an XCM MultiLocation into a local account id:
 	LocationToAccountId,
 	// Our chain's account ID type (we can't get away without mentioning it explicitly):
@@ -116,35 +116,15 @@ pub type CoretimeTransactor = NonFungiblesAdapter<
 	CheckingAccount,
 >;
 
-pub struct MultiAssetToUniquesConverter;
-impl MatchesNonFungibles<u32, RegionId> for MultiAssetToUniquesConverter {
-    fn matches_nonfungibles(a: &MultiAsset) -> Result<(u32, RegionId), MatchError> {
-        let (instance, class) = match (&a.fun, &a.id) {
-            (NonFungible(ref instance), Concrete(ref class)) => (instance, class),
-            _ => return Err(MatchError::AssetNotHandled),
-        };
-        let collection_id = Default::default();
-
-        let item_id = match instance {
-            Index(indx) => *indx,
-            _ => return Err(MatchError::AssetNotHandled),
-        };
-
-        Ok((collection_id, item_id.try_into().unwrap()))
-    }
-}
-
-/* TODO: Fixme
 type CoretimeConvertedConcreteId = MatchedConvertedConcreteId<
-	// There is only one collection, i.e. the Coretime regions.
-	u32,
+	// The entire broker pallet represents a single class of assets, i.e. Coretime regions.
+	(),
 	RegionId,
 	StartsWith<BrokerPalletLocation>,
-	// Since there is only one collection there is no collection id converter.
-	AsPrefixedGeneralIndex<(), u32, JustTry>,
+	// The class id is represented with the broker pallet index.
+	JustTry,
 	JustTry,
 >;
-*/
 
 /// This is the type we use to convert an (incoming) XCM origin into a local `Origin` instance,
 /// ready for dispatching a transaction with XCM's `Transact`. There is an `OriginKind` that can
@@ -258,10 +238,7 @@ pub type WaivedLocations = (
 );
 
 /// Means for transacting assets on this chain.
-pub type AssetTransactors = (
-	CurrencyTransactor,
-	CoretimeTransactor,
-);
+pub type AssetTransactors = (CurrencyTransactor, CoretimeTransactor);
 
 pub struct XcmConfig;
 impl xcm_executor::Config for XcmConfig {

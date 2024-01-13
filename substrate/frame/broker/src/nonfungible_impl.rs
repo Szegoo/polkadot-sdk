@@ -18,7 +18,7 @@
 use super::*;
 use frame_support::{
 	pallet_prelude::{DispatchResult, *},
-	traits::nonfungible::{Inspect, Transfer, Mutate},
+	traits::nonfungible::{Inspect, Mutate, Transfer},
 };
 use sp_std::vec::Vec;
 
@@ -52,27 +52,11 @@ impl<T: Config> Transfer<T::AccountId> for Pallet<T> {
 }
 
 impl<T: Config> Mutate<<T as frame_system::Config>::AccountId> for Pallet<T> {
-	fn mint_into(
-		item: &Self::ItemId,
-		who: &T::AccountId,
-	) -> DispatchResult {
-		//Self::do_mint(collection.clone(), *item, who.clone(), |_| Ok(()))
+	fn mint_into(item: &Self::ItemId, who: &T::AccountId) -> DispatchResult {
 		Ok(())
 	}
 
-	fn burn(
-		item: &Self::ItemId,
-		maybe_check_owner: Option<&T::AccountId>,
-	) -> DispatchResult {
+	fn burn(item: &Self::ItemId, maybe_check_owner: Option<&T::AccountId>) -> DispatchResult {
 		Ok(())
-		/*
-		Self::do_burn(collection.clone(), *item, |_, d| {
-			if let Some(check_owner) = maybe_check_owner {
-				if &d.owner != check_owner {
-					return Err(Error::<T, I>::NoPermission.into())
-				}
-			}
-			Ok(())
-		})*/
 	}
 }
