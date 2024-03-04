@@ -140,6 +140,12 @@ impl From<u64> for AssetInstance {
 	}
 }
 
+impl From<u128> for AssetInstance {
+	fn from(x: u128) -> Self {
+		Self::Index(x)
+	}
+}
+
 impl TryFrom<AssetInstance> for () {
 	type Error = ();
 	fn try_from(x: AssetInstance) -> Result<Self, ()> {
