@@ -450,7 +450,7 @@ async fn import_block_as_new_best<Block, P>(
 			"Skipping importing block as new best block, because there already exists a \
 			 best block with an higher number",
 		);
-		return
+		// return
 	}
 
 	// Make it the new best block
