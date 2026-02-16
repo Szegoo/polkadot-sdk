@@ -16,7 +16,7 @@
 // limitations under the License.
 
 use core::cmp;
-use frame_support::{ensure, traits::tokens::Balance};
+use frame_support::ensure;
 use frame_system::pallet_prelude::AccountIdFor;
 use sp_arithmetic::FixedPointNumber;
 use sp_runtime::{DispatchError, FixedU64, SaturatedConversion, Saturating};
@@ -142,11 +142,9 @@ impl<T: Config> Market<BalanceOf<T>, RelayBlockNumberOf<T>, AccountIdFor<T>> for
 		ensure!(sale.first_core < status.core_count, MarketError::Unavailable);
 		ensure!(sale.cores_sold < sale.cores_offered, MarketError::SoldOut);
 
-		// TODO: Check if it can be the case.
 		ensure!(block_number > sale.sale_start, MarketError::TooEarly);
-		let blocks_since_sale_begin = block_number.saturating_sub(sale.sale_start);
 
-		let sell_price = sell_price::<T>(blocks_since_sale_begin)?;
+		let sell_price = sell_price::<T>(block_number, &sale)?;
 
 		if price_limit < sell_price {
 			return Err(MarketError::Overpriced)
@@ -181,13 +179,9 @@ impl<T: Config> Market<BalanceOf<T>, RelayBlockNumberOf<T>, AccountIdFor<T>> for
 		ensure!(sale.first_core < status.core_count, MarketError::Unavailable);
 		ensure!(sale.cores_sold < sale.cores_offered, MarketError::SoldOut);
 
-		// TODO: Renewals may be made in the interlude period. Process this case (there
-		// since_timeslice_start will be 0).
-		let since_timeslice_start = block_number.saturating_sub(sale.sale_start);
-
 		let price_cap =
 			cmp::max(recorded_price + config.renewal_bump * recorded_price, sale.end_price);
-		let sell_price = sell_price::<T>(since_timeslice_start)?;
+		let sell_price = sell_price::<T>(block_number, &sale)?;
 		let next_renewal_price = sell_price.min(price_cap);
 
 		let core = purchase_core::<T>(who, recorded_price, &mut sale);
@@ -230,12 +224,13 @@ fn purchase_core<T: Config>(
 }
 
 fn sell_price<T: Config>(
-	since_timeslice_start: RelayBlockNumberOf<T>,
+	now: RelayBlockNumberOf<T>,
+	sale: &SaleInfoRecordOf<T>,
 ) -> Result<BalanceOf<T>, MarketError> {
 	// TODO: Store this info in the dedicated storage item?
 	let sale = SaleInfo::<T>::get().ok_or(MarketError::NoSales)?;
 
-	let num = since_timeslice_start.min(sale.leadin_length).saturated_into();
+	let num = now.saturating_sub(sale.sale_start).min(sale.leadin_length).saturated_into();
 	let through = FixedU64::from_rational(num, sale.leadin_length.saturated_into());
 	Ok(leadin_factor_at(through).saturating_mul_int(sale.end_price))
 }
