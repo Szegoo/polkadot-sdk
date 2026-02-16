@@ -15,12 +15,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use core::cmp;
-
 use super::*;
 use frame_support::{
 	pallet_prelude::*,
 	traits::{fungible::Mutate, tokens::Preservation::Expendable, DefensiveResult},
+	transactional,
 };
 use sp_arithmetic::traits::{CheckedDiv, Saturating, Zero};
 use sp_runtime::traits::{BlockNumberProvider, Convert};
@@ -178,8 +177,12 @@ impl<T: Config> Pallet<T> {
 
 	/// Must be called on a core in `PotentialRenewals` whose value is a timeslice equal to the
 	/// current sale status's `region_end`.
-	pub(crate) fn do_renew(who: T::AccountId, core: CoreIndex) -> Result<(), DispatchError> {
-		// TODO: Try to avoid readin SaleInfo here.
+	#[transactional] // It gets called in `do_enable_auto_renew` and can mutate the storage.
+	pub(crate) fn do_renew(
+		who: T::AccountId,
+		core: CoreIndex,
+	) -> Result<DoRenewResult, DispatchError> {
+		// TODO: Try to avoid reading SaleInfo here.
 		let sale = SaleInfo::<T>::get().ok_or(Error::<T>::NoSales)?;
 
 		let renewal_id = PotentialRenewalId { core, when: sale.region_begin };
@@ -193,6 +196,8 @@ impl<T: Config> Pallet<T> {
 				Self::charge(&who, bid_price)?;
 
 				Self::deposit_event(Event::BidPlaced { bid_id: id, price: bid_price });
+
+				Ok(DoRenewResult::BidPlaced)
 			},
 			RenewalOrderResult::Sold {
 				price,
@@ -233,10 +238,10 @@ impl<T: Config> Pallet<T> {
 						workload,
 					});
 				}
-			},
-		};
 
-		Ok(())
+				Ok(DoRenewResult::Renewed { new_core })
+			},
+		}
 	}
 
 	pub(crate) fn do_transfer(
@@ -582,8 +587,13 @@ impl<T: Config> Pallet<T> {
 		if PotentialRenewals::<T>::get(PotentialRenewalId { core, when: sale.region_begin })
 			.is_some()
 		{
-			// TODO: Fix this logic.
-			//core = Self::do_renew(sovereign_account.clone(), core)?;
+			let DoRenewResult::Renewed { new_core } =
+				Self::do_renew(sovereign_account.clone(), core)?
+			else {
+				return Err(Error::<T>::NotAllowed.into());
+			};
+
+			core = new_core;
 		} else if let Some(workload_end) = workload_end_hint {
 			ensure!(
 				PotentialRenewals::<T>::get(PotentialRenewalId { core, when: workload_end })
@@ -669,4 +679,10 @@ impl<T: Config> Pallet<T> {
 
 		Ok(())
 	}
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DoRenewResult {
+	Renewed { new_core: CoreIndex },
+	BidPlaced,
 }

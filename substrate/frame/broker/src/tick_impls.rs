@@ -15,6 +15,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::dispatchable_impls::DoRenewResult;
+
 use super::*;
 use alloc::{vec, vec::Vec};
 use frame_support::{pallet_prelude::*, traits::defensive_prelude::*, weights::WeightMeter};
@@ -375,21 +377,30 @@ impl<T: Config> Pallet<T> {
 					return None
 				};
 
-				if Self::do_renew(payer.clone(), record.core).is_ok() {
-					// TODO
-					// Some(AutoRenewalRecord {
-					// 	core: new_core_index,
-					// 	task: record.task,
-					// 	next_renewal: sale.region_end,
-					// })
-					None
-				} else {
-					Self::deposit_event(Event::<T>::AutoRenewalFailed {
-						core: record.core,
-						payer: Some(payer),
-					});
+				let renew_result = Self::do_renew(payer.clone(), record.core);
+				match renew_result {
+					Ok(DoRenewResult::Renewed { new_core }) => Some(AutoRenewalRecord {
+						core: new_core,
+						task: record.task,
+						next_renewal: sale.region_end,
+					}),
+					Ok(_) => {
+						// TODO: Figure out what to do when do_renew places a bid.
+						Self::deposit_event(Event::<T>::AutoRenewalFailed {
+							core: record.core,
+							payer: Some(payer),
+						});
 
-					None
+						None
+					},
+					Err(_) => {
+						Self::deposit_event(Event::<T>::AutoRenewalFailed {
+							core: record.core,
+							payer: Some(payer),
+						});
+
+						None
+					},
 				}
 			})
 			.collect::<Vec<AutoRenewalRecord>>()
