@@ -57,7 +57,7 @@ pub trait Market<Balance, RelayBlockNumber, AccountId> {
 	///
 	/// - `since_timeslice_start` - amount of blocks passed since the current timeslice start
 	fn place_renewal_order(
-		since_timeslice_start: RelayBlockNumber,
+		block_number: RelayBlockNumber,
 		who: &AccountId,
 		renewal: PotentialRenewalId,
 		recorded_price: Balance,
@@ -153,8 +153,10 @@ impl<T: Config> Market<BalanceOf<T>, RelayBlockNumberOf<T>, AccountIdFor<T>> for
 		})
 	}
 
+	// TODO: If we return Sold also return optional argument showing whether we should create a new
+	// potential renewal or not.
 	fn place_renewal_order(
-		since_timeslice_start: RelayBlockNumberOf<T>,
+		block_number: RelayBlockNumberOf<T>,
 		who: &AccountIdFor<T>,
 		renewal: PotentialRenewalId,
 		recorded_price: BalanceOf<T>,
@@ -168,6 +170,10 @@ impl<T: Config> Market<BalanceOf<T>, RelayBlockNumberOf<T>, AccountIdFor<T>> for
 
 		ensure!(sale.first_core < status.core_count, MarketError::Unavailable);
 		ensure!(sale.cores_sold < sale.cores_offered, MarketError::SoldOut);
+
+		// TODO: Renewals may be made in the interlude period. Process this case (there
+		// since_timeslice_start will be 0).
+		let since_timeslice_start = block_number.saturating_sub(sale.sale_start);
 
 		let price_cap =
 			cmp::max(recorded_price + config.renewal_bump * recorded_price, sale.end_price);

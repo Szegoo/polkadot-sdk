@@ -179,20 +179,13 @@ impl<T: Config> Pallet<T> {
 	/// Must be called on a core in `PotentialRenewals` whose value is a timeslice equal to the
 	/// current sale status's `region_end`.
 	pub(crate) fn do_renew(who: T::AccountId, core: CoreIndex) -> Result<(), DispatchError> {
-		// TODO: Try to avoid reading sale info here.
-		let sale = SaleInfo::<T>::get().ok_or(Error::<T>::NoSales)?;
-
 		let renewal_id = PotentialRenewalId { core, when: sale.region_begin };
 		let record = PotentialRenewals::<T>::get(renewal_id).ok_or(Error::<T>::NotAllowed)?;
 		let workload =
 			record.completion.drain_complete().ok_or(Error::<T>::IncompleteAssignment)?;
 
 		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
-		// TODO: Check if it can be the case.
-		//ensure!(now > sale.sale_start, Error::<T>::TooEarly);
-		let blocks_since_sale_begin = now.saturating_sub(sale.sale_start);
-
-		match Self::place_renewal_order(blocks_since_sale_begin, &who, renewal_id, record.price)? {
+		match Self::place_renewal_order(now, &who, renewal_id, record.price)? {
 			RenewalOrderResult::BidPlaced { id, bid_price } => {
 				Self::charge(&who, bid_price)?;
 
