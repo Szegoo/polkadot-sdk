@@ -179,6 +179,9 @@ impl<T: Config> Pallet<T> {
 	/// Must be called on a core in `PotentialRenewals` whose value is a timeslice equal to the
 	/// current sale status's `region_end`.
 	pub(crate) fn do_renew(who: T::AccountId, core: CoreIndex) -> Result<(), DispatchError> {
+		// TODO: Try to avoid readin SaleInfo here.
+		let sale = SaleInfo::<T>::get().ok_or(Error::<T>::NoSales)?;
+
 		let renewal_id = PotentialRenewalId { core, when: sale.region_begin };
 		let record = PotentialRenewals::<T>::get(renewal_id).ok_or(Error::<T>::NotAllowed)?;
 		let workload =
@@ -191,33 +194,34 @@ impl<T: Config> Pallet<T> {
 
 				Self::deposit_event(Event::BidPlaced { bid_id: id, price: bid_price });
 			},
-			RenewalOrderResult::Sold { price, next_renewal_price, core: new_core } => {
+			RenewalOrderResult::Sold {
+				price,
+				next_renewal_price,
+				effective_from,
+				effective_to,
+				core: new_core,
+			} => {
 				Self::charge(&who, price)?;
 
-				// TODO: Try to avoid reading sale info here. NOTE: It gets modified inside of
-				// `place_renewal_order` so needs to be read again.
-				let sale = SaleInfo::<T>::get().ok_or(Error::<T>::NoSales)?;
+				Workplan::<T>::insert((effective_from, new_core), &workload);
 
 				Self::deposit_event(Event::Renewed {
 					who,
 					old_core: core,
 					core: new_core,
 					price,
-					begin: sale.region_begin,
-					duration: sale.region_end.saturating_sub(sale.region_begin),
+					begin: effective_from,
+					duration: effective_to.saturating_sub(effective_from),
 					workload: workload.clone(),
 				});
 
-				Workplan::<T>::insert((sale.region_begin, new_core), &workload);
-
-				let begin = sale.region_end;
 				let new_record = PotentialRenewalRecord {
 					price: next_renewal_price,
 					completion: Complete(workload),
 				};
 				PotentialRenewals::<T>::remove(renewal_id);
 				PotentialRenewals::<T>::insert(
-					PotentialRenewalId { core: new_core, when: begin },
+					PotentialRenewalId { core: new_core, when: effective_to },
 					&new_record,
 				);
 				if let Some(workload) = new_record.completion.drain_complete() {
@@ -225,7 +229,7 @@ impl<T: Config> Pallet<T> {
 					Self::deposit_event(Event::Renewable {
 						core: new_core,
 						price,
-						begin,
+						begin: effective_to,
 						workload,
 					});
 				}

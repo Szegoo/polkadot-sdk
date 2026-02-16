@@ -84,8 +84,18 @@ pub enum OrderResult<Balance, BidId> {
 }
 
 pub enum RenewalOrderResult<Balance, BidId> {
-	BidPlaced { id: BidId, bid_price: Balance },
-	Sold { price: Balance, next_renewal_price: Balance, core: CoreIndex },
+	BidPlaced {
+		id: BidId,
+		bid_price: Balance,
+	},
+	Sold {
+		price: Balance,
+		next_renewal_price: Balance,
+		/// Timeslice where the newly renewed coretime will be active.
+		effective_from: Timeslice,
+		effective_to: Timeslice,
+		core: CoreIndex,
+	},
 }
 
 pub struct CloseBidResult<AccountId, Balance> {
@@ -183,7 +193,13 @@ impl<T: Config> Market<BalanceOf<T>, RelayBlockNumberOf<T>, AccountIdFor<T>> for
 		let core = purchase_core::<T>(who, recorded_price, &mut sale);
 		SaleInfo::<T>::put(&sale);
 
-		return Ok(RenewalOrderResult::Sold { price: recorded_price, next_renewal_price, core })
+		return Ok(RenewalOrderResult::Sold {
+			price: recorded_price,
+			next_renewal_price,
+			effective_from: sale.region_begin,
+			effective_to: sale.region_end,
+			core,
+		})
 	}
 
 	fn close_bid(
