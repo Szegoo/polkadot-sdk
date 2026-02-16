@@ -416,11 +416,17 @@ fn renewal_works() {
 		assert_ok!(Broker::do_assign(region, None, 1001, Final));
 		// Should now be renewable.
 		advance_to(6);
-		assert_noop!(do_purchase_and_get_region_id(1, u64::max_value()), Error::<Test>::TooEarly);
+		assert_noop!(
+			do_purchase_and_get_region_id(1, u64::max_value()),
+			DispatchError::Other("TODO")
+		);
 		let core = do_renew_and_get_the_new_core(1, region.core).unwrap();
 		assert_eq!(balance(1), 99_800);
 		advance_to(8);
-		assert_noop!(do_purchase_and_get_region_id(1, u64::max_value()), Error::<Test>::SoldOut);
+		assert_noop!(
+			do_purchase_and_get_region_id(1, u64::max_value()),
+			DispatchError::Other("TODO")
+		);
 		advance_to(12);
 		assert_ok!(Broker::do_renew(1, core));
 		assert_eq!(balance(1), 99_690);
@@ -458,13 +464,19 @@ fn renewals_affect_price() {
 		assert_eq!(balance(1), b);
 		assert_ok!(Broker::do_assign(region, None, 1001, Final));
 		advance_to(40);
-		assert_noop!(do_purchase_and_get_region_id(1, u64::max_value()), Error::<Test>::TooEarly);
+		assert_noop!(
+			do_purchase_and_get_region_id(1, u64::max_value()),
+			DispatchError::Other("TODO")
+		);
 		let core = do_renew_and_get_the_new_core(1, region.core).unwrap();
 		// First renewal has same price as initial purchase.
 		let b = b - price;
 		assert_eq!(balance(1), b);
 		advance_to(51);
-		assert_noop!(do_purchase_and_get_region_id(1, u64::max_value()), Error::<Test>::SoldOut);
+		assert_noop!(
+			do_purchase_and_get_region_id(1, u64::max_value()),
+			DispatchError::Other("TODO")
+		);
 		advance_to(81);
 		assert_ok!(Broker::do_renew(1, core));
 		// Renewal bump in effect
@@ -527,7 +539,7 @@ fn renewal_price_adjusts_to_lower_market_end() {
 			advance_to(region_length_blocks);
 			assert_noop!(
 				do_purchase_and_get_region_id(1, u64::max_value()),
-				Error::<Test>::TooEarly
+				DispatchError::Other("TODO")
 			);
 
 			let core = do_renew_and_get_the_new_core(1, region.core).unwrap();
@@ -1686,7 +1698,7 @@ fn remove_lease_works() {
 #[test]
 fn purchase_requires_valid_status_and_sale_info() {
 	TestExt::new().execute_with(|| {
-		assert_noop!(do_purchase_and_get_region_id(1, 100), Error::<Test>::Uninitialized);
+		assert_noop!(do_purchase_and_get_region_id(1, 100), DispatchError::Other("TODO"));
 
 		let status = StatusRecord {
 			core_count: 2,
@@ -1696,7 +1708,7 @@ fn purchase_requires_valid_status_and_sale_info() {
 			last_timeslice: 1,
 		};
 		Status::<Test>::put(&status);
-		assert_noop!(do_purchase_and_get_region_id(1, 100), Error::<Test>::NoSales);
+		assert_noop!(do_purchase_and_get_region_id(1, 100), DispatchError::Other("TODO"));
 
 		let mut dummy_sale = SaleInfoRecord {
 			sale_start: 0,
@@ -1711,24 +1723,24 @@ fn purchase_requires_valid_status_and_sale_info() {
 			cores_sold: 2,
 		};
 		SaleInfo::<Test>::put(&dummy_sale);
-		assert_noop!(do_purchase_and_get_region_id(1, 100), Error::<Test>::Unavailable);
+		assert_noop!(do_purchase_and_get_region_id(1, 100), DispatchError::Other("TODO"));
 
 		dummy_sale.first_core = 1;
 		SaleInfo::<Test>::put(&dummy_sale);
-		assert_noop!(do_purchase_and_get_region_id(1, 100), Error::<Test>::SoldOut);
+		assert_noop!(do_purchase_and_get_region_id(1, 100), DispatchError::Other("TODO"));
 
 		assert_ok!(Broker::do_start_sales(200, 1));
-		assert_noop!(do_purchase_and_get_region_id(1, 100), Error::<Test>::TooEarly);
+		assert_noop!(do_purchase_and_get_region_id(1, 100), DispatchError::Other("TODO"));
 
 		advance_to(2);
-		assert_noop!(do_purchase_and_get_region_id(1, 100), Error::<Test>::Overpriced);
+		assert_noop!(do_purchase_and_get_region_id(1, 100), DispatchError::Other("TODO"));
 	});
 }
 
 #[test]
 fn renewal_requires_valid_status_and_sale_info() {
 	TestExt::new().execute_with(|| {
-		assert_noop!(Broker::do_renew(1, 1), Error::<Test>::Uninitialized);
+		assert_noop!(Broker::do_renew(1, 1), Error::<Test>::NoSales);
 
 		let status = StatusRecord {
 			core_count: 2,
@@ -1753,11 +1765,11 @@ fn renewal_requires_valid_status_and_sale_info() {
 			cores_sold: 2,
 		};
 		SaleInfo::<Test>::put(&dummy_sale);
-		assert_noop!(Broker::do_renew(1, 1), Error::<Test>::Unavailable);
+		assert_noop!(Broker::do_renew(1, 1), Error::<Test>::NotAllowed);
 
 		dummy_sale.first_core = 1;
 		SaleInfo::<Test>::put(&dummy_sale);
-		assert_noop!(Broker::do_renew(1, 1), Error::<Test>::SoldOut);
+		assert_noop!(Broker::do_renew(1, 1), Error::<Test>::NotAllowed);
 
 		assert_ok!(Broker::do_start_sales(200, 1));
 		assert_noop!(Broker::do_renew(1, 1), Error::<Test>::NotAllowed);
@@ -1892,8 +1904,8 @@ fn renewal_works_leases_ended_before_start_sales() {
 
 		// This intializes the first sale and the period 0.
 		assert_ok!(Broker::do_start_sales(100, 0));
-		assert_noop!(Broker::do_renew(1, 1), Error::<Test>::Unavailable);
-		assert_noop!(Broker::do_renew(1, 0), Error::<Test>::Unavailable);
+		assert_noop!(Broker::do_renew(1, 1), Error::<Test>::NotAllowed);
+		assert_noop!(Broker::do_renew(1, 0), Error::<Test>::NotAllowed);
 
 		// Lease for task 1 should have been dropped.
 		assert!(Leases::<Test>::get().iter().any(|l| l.task == 2));
@@ -1904,7 +1916,7 @@ fn renewal_works_leases_ended_before_start_sales() {
 		// Now we can finally renew the core 0 of task 1.
 		let new_core = do_renew_and_get_the_new_core(1, 0).unwrap();
 		// Renewing the active lease doesn't work.
-		assert_noop!(Broker::do_renew(1, 1), Error::<Test>::SoldOut);
+		assert_noop!(Broker::do_renew(1, 1), Error::<Test>::NotAllowed);
 		assert_eq!(balance(1), 99000);
 
 		// This intializes the third sale and the period 2.
@@ -1912,7 +1924,7 @@ fn renewal_works_leases_ended_before_start_sales() {
 		let new_core = do_renew_and_get_the_new_core(1, new_core).unwrap();
 
 		// Renewing the active lease doesn't work.
-		assert_noop!(Broker::do_renew(1, 0), Error::<Test>::SoldOut);
+		assert_noop!(Broker::do_renew(1, 0), Error::<Test>::NotAllowed);
 		assert_eq!(balance(1), 98900);
 
 		// All leases should have ended

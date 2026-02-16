@@ -179,10 +179,8 @@ impl<T: Config> Pallet<T> {
 	/// Must be called on a core in `PotentialRenewals` whose value is a timeslice equal to the
 	/// current sale status's `region_end`.
 	pub(crate) fn do_renew(who: T::AccountId, core: CoreIndex) -> Result<(), DispatchError> {
-		let config = Configuration::<T>::get().ok_or(Error::<T>::Uninitialized)?;
-		let status = Status::<T>::get().ok_or(Error::<T>::Uninitialized)?;
-		let mut sale = SaleInfo::<T>::get().ok_or(Error::<T>::NoSales)?;
-		Self::ensure_cores_for_sale(&status, &sale)?;
+		// TODO: Try to avoid reading sale info here.
+		let sale = SaleInfo::<T>::get().ok_or(Error::<T>::NoSales)?;
 
 		let renewal_id = PotentialRenewalId { core, when: sale.region_begin };
 		let record = PotentialRenewals::<T>::get(renewal_id).ok_or(Error::<T>::NotAllowed)?;
@@ -200,22 +198,24 @@ impl<T: Config> Pallet<T> {
 
 				Self::deposit_event(Event::BidPlaced { bid_id: id, price: bid_price });
 			},
-			RenewalOrderResult::Sold { price, next_renewal_price } => {
-				let old_core = core;
+			RenewalOrderResult::Sold { price, next_renewal_price, core: new_core } => {
+				Self::charge(&who, price)?;
 
-				let core = Self::purchase_core(&who, price, &mut sale)?;
+				// TODO: Try to avoid reading sale info here. NOTE: It gets modified inside of
+				// `place_renewal_order` so needs to be read again.
+				let sale = SaleInfo::<T>::get().ok_or(Error::<T>::NoSales)?;
 
 				Self::deposit_event(Event::Renewed {
 					who,
-					old_core,
-					core,
+					old_core: core,
+					core: new_core,
 					price,
 					begin: sale.region_begin,
 					duration: sale.region_end.saturating_sub(sale.region_begin),
 					workload: workload.clone(),
 				});
 
-				Workplan::<T>::insert((sale.region_begin, core), &workload);
+				Workplan::<T>::insert((sale.region_begin, new_core), &workload);
 
 				let begin = sale.region_end;
 				let new_record = PotentialRenewalRecord {
@@ -224,13 +224,17 @@ impl<T: Config> Pallet<T> {
 				};
 				PotentialRenewals::<T>::remove(renewal_id);
 				PotentialRenewals::<T>::insert(
-					PotentialRenewalId { core, when: begin },
+					PotentialRenewalId { core: new_core, when: begin },
 					&new_record,
 				);
-				SaleInfo::<T>::put(&sale);
 				if let Some(workload) = new_record.completion.drain_complete() {
 					log::debug!("Recording renewable price for next run: {:?}", price);
-					Self::deposit_event(Event::Renewable { core, price, begin, workload });
+					Self::deposit_event(Event::Renewable {
+						core: new_core,
+						price,
+						begin,
+						workload,
+					});
 				}
 			},
 		};

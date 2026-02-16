@@ -85,7 +85,7 @@ pub enum OrderResult<Balance, BidId> {
 
 pub enum RenewalOrderResult<Balance, BidId> {
 	BidPlaced { id: BidId, bid_price: Balance },
-	Sold { price: Balance, next_renewal_price: Balance },
+	Sold { price: Balance, next_renewal_price: Balance, core: CoreIndex },
 }
 
 pub struct CloseBidResult<AccountId, Balance> {
@@ -161,15 +161,23 @@ impl<T: Config> Market<BalanceOf<T>, RelayBlockNumberOf<T>, AccountIdFor<T>> for
 	) -> Result<RenewalOrderResult<BalanceOf<T>, Self::BidId>, Self::Error> {
 		// TODO: Store `config.renewal_bump` in the market config.
 		let config = Configuration::<T>::get().ok_or(MarketError::Uninitialized)?;
+		// TODO: don't read status here.
+		let status = Status::<T>::get().ok_or(MarketError::Uninitialized)?;
 		// TODO: Don't access main pallet storage here.
-		let sale = SaleInfo::<T>::get().ok_or(MarketError::NoSales)?;
+		let mut sale = SaleInfo::<T>::get().ok_or(MarketError::NoSales)?;
+
+		ensure!(sale.first_core < status.core_count, MarketError::Unavailable);
+		ensure!(sale.cores_sold < sale.cores_offered, MarketError::SoldOut);
 
 		let price_cap =
 			cmp::max(recorded_price + config.renewal_bump * recorded_price, sale.end_price);
 		let sell_price = sell_price::<T>(since_timeslice_start)?;
 		let next_renewal_price = sell_price.min(price_cap);
 
-		return Ok(RenewalOrderResult::Sold { price: recorded_price, next_renewal_price })
+		let core = purchase_core::<T>(who, recorded_price, &mut sale);
+		SaleInfo::<T>::put(&sale);
+
+		return Ok(RenewalOrderResult::Sold { price: recorded_price, next_renewal_price, core })
 	}
 
 	fn close_bid(
