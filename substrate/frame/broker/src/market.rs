@@ -19,11 +19,12 @@ use core::cmp;
 use frame_support::ensure;
 use frame_system::pallet_prelude::AccountIdFor;
 use sp_arithmetic::FixedPointNumber;
+use sp_core::Get;
 use sp_runtime::{DispatchError, FixedU64, SaturatedConversion, Saturating};
 
 use crate::{
-	BalanceOf, Config, Configuration, CoreIndex, Pallet, PotentialRenewalId, RelayBlockNumberOf,
-	SaleInfo, SaleInfoRecordOf, Status, Timeslice,
+	BalanceOf, Config, ConfigRecordOf, Configuration, CoreIndex, Pallet, PotentialRenewalId,
+	RelayBlockNumberOf, SaleInfo, SaleInfoRecordOf, Status, StatusRecord, Timeslice,
 };
 
 // TODO: Extend the documentation.
@@ -73,9 +74,7 @@ pub trait Market<Balance, RelayBlockNumber, AccountId> {
 	) -> Result<CloseBidResult<AccountId, Balance>, Self::Error>;
 
 	/// Logic that gets called in `on_initialize` hook.
-	fn tick(
-		since_timeslice_start: RelayBlockNumber,
-	) -> Vec<TickAction<AccountId, Balance, Self::BidId>>;
+	fn tick(now: RelayBlockNumber) -> Vec<TickAction<AccountId, Balance, Self::BidId>>;
 }
 
 pub enum OrderResult<Balance, BidId> {
@@ -204,8 +203,34 @@ impl<T: Config> Market<BalanceOf<T>, RelayBlockNumberOf<T>, AccountIdFor<T>> for
 	}
 
 	fn tick(
-		since_timeslice_start: RelayBlockNumberOf<T>,
+		now: RelayBlockNumberOf<T>,
 	) -> Vec<TickAction<AccountIdFor<T>, BalanceOf<T>, Self::BidId>> {
+		// TODO: Store `config.renewal_bump` in the market config.
+		let config = Configuration::<T>::get().unwrap();
+		// TODO: don't read status here.
+		let mut status = Status::<T>::get().unwrap();
+
+		if let Some(commit_timeslice) = Self::next_timeslice_to_commit(&config, &status) {
+			status.last_committed_timeslice = commit_timeslice;
+			if let Some(sale) = SaleInfo::<T>::get() {
+				if commit_timeslice >= sale.region_begin {
+					// TODO: call OnRotateSale.
+					Self::rotate_sale(sale, &config, &status);
+				}
+			}
+
+			// TODO: Call some hook instead.
+			Self::process_pool(commit_timeslice, &mut status);
+
+			let timeslice_period = T::TimeslicePeriod::get();
+			let rc_begin = RelayBlockNumberOf::<T>::from(commit_timeslice) * timeslice_period;
+			for core in 0..status.core_count {
+				Self::process_core_schedule(commit_timeslice, rc_begin, core);
+			}
+		}
+
+		Status::<T>::put(status);
+
 		vec![]
 	}
 }
@@ -241,4 +266,25 @@ fn leadin_factor_at(when: FixedU64) -> FixedU64 {
 	} else {
 		FixedU64::from(19).saturating_sub(when.saturating_mul(18.into()))
 	}
+}
+
+fn next_timeslice_to_commit<T: Config>(
+	now: RelayBlockNumberOf<T>,
+	config: &ConfigRecordOf<T>,
+	status: &StatusRecord,
+) -> Option<Timeslice> {
+	if status.last_committed_timeslice < latest_timeslice_ready_to_commit::<T>(now, config) {
+		Some(status.last_committed_timeslice + 1)
+	} else {
+		None
+	}
+}
+
+fn latest_timeslice_ready_to_commit<T: Config>(
+	now: RelayBlockNumberOf<T>,
+	config: &ConfigRecordOf<T>,
+) -> Timeslice {
+	let advanced = now.saturating_add(config.advance_notice);
+	let timeslice_period = T::TimeslicePeriod::get();
+	(advanced / timeslice_period).saturated_into()
 }

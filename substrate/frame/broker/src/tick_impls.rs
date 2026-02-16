@@ -51,27 +51,6 @@ impl<T: Config> Pallet<T> {
 			meter.consume(T::WeightInfo::process_revenue());
 		}
 
-		if let Some(commit_timeslice) = Self::next_timeslice_to_commit(&config, &status) {
-			status.last_committed_timeslice = commit_timeslice;
-			if let Some(sale) = SaleInfo::<T>::get() {
-				if commit_timeslice >= sale.region_begin {
-					// Sale can be rotated.
-					Self::rotate_sale(sale, &config, &status);
-					meter.consume(T::WeightInfo::rotate_sale(status.core_count.into()));
-				}
-			}
-
-			Self::process_pool(commit_timeslice, &mut status);
-			meter.consume(T::WeightInfo::process_pool());
-
-			let timeslice_period = T::TimeslicePeriod::get();
-			let rc_begin = RelayBlockNumberOf::<T>::from(commit_timeslice) * timeslice_period;
-			for core in 0..status.core_count {
-				Self::process_core_schedule(commit_timeslice, rc_begin, core);
-				meter.consume(T::WeightInfo::process_core_schedule());
-			}
-		}
-
 		let current_timeslice = Self::current_timeslice();
 		if status.last_timeslice < current_timeslice {
 			status.last_timeslice.saturating_inc();
@@ -414,7 +393,6 @@ impl<T: Config> Pallet<T> {
 	}
 
 	fn process_market_logic() {
-		// TODO: Compute since_timeslice_start.
 		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
 		let result = <Self as Market<_, _, _>>::tick(now);
 
