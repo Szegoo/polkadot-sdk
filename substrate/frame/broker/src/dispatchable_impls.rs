@@ -181,7 +181,7 @@ impl<T: Config> Pallet<T> {
 	pub(crate) fn do_renew(
 		who: T::AccountId,
 		core: CoreIndex,
-	) -> Result<DoRenewResult, DispatchError> {
+	) -> Result<DoRenewResult<T>, DispatchError> {
 		// TODO: Try to avoid reading SaleInfo here.
 		let sale = SaleInfo::<T>::get().ok_or(Error::<T>::NoSales)?;
 
@@ -197,7 +197,7 @@ impl<T: Config> Pallet<T> {
 
 				Self::deposit_event(Event::BidPlaced { bid_id: id, price: bid_price });
 
-				Ok(DoRenewResult::BidPlaced)
+				Ok(DoRenewResult::BidPlaced { id })
 			},
 			RenewalOrderResult::Sold {
 				price,
@@ -682,7 +682,7 @@ impl<T: Config> Pallet<T> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum DoRenewResult {
+pub(crate) enum DoRenewResult<T: Config> {
 	Renewed { new_core: CoreIndex },
-	BidPlaced,
+	BidPlaced { id: BidIdOf<T> },
 }

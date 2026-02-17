@@ -316,17 +316,21 @@ impl<T: Config> Pallet<T> {
 
 				let renew_result = Self::do_renew(payer.clone(), record.core);
 				match renew_result {
+					// TODO: How is it guaranteed that it's still sorted by core?
 					Ok(DoRenewResult::Renewed { new_core }) => Some(AutoRenewalRecord {
 						core: new_core,
 						task: record.task,
 						next_renewal: sale.region_end,
 					}),
-					Ok(_) => {
-						// TODO: Figure out what to do when do_renew places a bid.
+					Ok(DoRenewResult::BidPlaced { id }) => {
+						// We don't support auto-renewals when market doesn't allow purchasing
+						// regions right away.
 						Self::deposit_event(Event::<T>::AutoRenewalFailed {
 							core: record.core,
 							payer: Some(payer),
 						});
+
+						let _ = Self::close_bid(id, None);
 
 						None
 					},
