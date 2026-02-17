@@ -159,10 +159,6 @@ impl<T: Config> Pallet<T> {
 		InstaPoolIo::<T>::mutate(old_sale.region_end, |r| r.system.saturating_reduce(old_pooled));
 
 		// Set workload for the reserved (system, probably) workloads.
-		// TODO: Compute from the new sale.
-		let region_begin = old_sale.region_end;
-		let region_end = region_begin + config.region_length;
-
 		let mut first_core = 0;
 		let mut total_pooled: SignedCoreMaskBitCount = 0;
 		for schedule in Reservations::<T>::get().into_iter() {
@@ -173,7 +169,7 @@ impl<T: Config> Pallet<T> {
 				.sum();
 			total_pooled.saturating_accrue(parts as i32);
 
-			Workplan::<T>::insert((region_begin, first_core), &schedule);
+			Workplan::<T>::insert((new_sale.region_begin, first_core), &schedule);
 			first_core.saturating_inc();
 		}
 
@@ -188,8 +184,10 @@ impl<T: Config> Pallet<T> {
 			force_core.saturating_inc();
 		}
 
-		InstaPoolIo::<T>::mutate(region_begin, |r| r.system.saturating_accrue(total_pooled));
-		InstaPoolIo::<T>::mutate(region_end, |r| r.system.saturating_reduce(total_pooled));
+		InstaPoolIo::<T>::mutate(new_sale.region_begin, |r| {
+			r.system.saturating_accrue(total_pooled)
+		});
+		InstaPoolIo::<T>::mutate(new_sale.region_end, |r| r.system.saturating_reduce(total_pooled));
 
 		let mut leases = Leases::<T>::get();
 		// Can morph to a renewable as long as it's >=begin and <end.
@@ -197,12 +195,12 @@ impl<T: Config> Pallet<T> {
 			let mask = CoreMask::complete();
 			let assignment = CoreAssignment::Task(task);
 			let schedule = BoundedVec::truncate_from(vec![ScheduleItem { mask, assignment }]);
-			Workplan::<T>::insert((region_begin, first_core), &schedule);
+			Workplan::<T>::insert((new_sale.region_begin, first_core), &schedule);
 			// Will the lease expire at the end of the period?
-			let expire = until < region_end;
+			let expire = until < new_sale.region_end;
 			if expire {
 				// last time for this one - make it renewable in the next sale.
-				let renewal_id = PotentialRenewalId { core: first_core, when: region_end };
+				let renewal_id = PotentialRenewalId { core: first_core, when: new_sale.region_end };
 				let record = PotentialRenewalRecord {
 					price: new_prices.target_price,
 					completion: Complete(schedule),
@@ -211,10 +209,10 @@ impl<T: Config> Pallet<T> {
 				Self::deposit_event(Event::Renewable {
 					core: first_core,
 					price: new_prices.target_price,
-					begin: region_end,
+					begin: new_sale.region_end,
 					workload: record.completion.drain_complete().unwrap_or_default(),
 				});
-				Self::deposit_event(Event::LeaseEnding { when: region_end, task });
+				Self::deposit_event(Event::LeaseEnding { when: new_sale.region_end, task });
 			}
 
 			first_core.saturating_inc();
