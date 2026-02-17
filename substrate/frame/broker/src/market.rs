@@ -23,8 +23,9 @@ use sp_core::Get;
 use sp_runtime::{DispatchError, FixedU64, SaturatedConversion, Saturating};
 
 use crate::{
-	BalanceOf, Config, ConfigRecordOf, Configuration, CoreIndex, Pallet, PotentialRenewalId,
-	RelayBlockNumberOf, SaleInfo, SaleInfoRecordOf, Status, StatusRecord, Timeslice,
+	AdaptPrice, AdaptedPrices, BalanceOf, Config, ConfigRecordOf, Configuration, CoreIndex, Leases,
+	Pallet, PotentialRenewalId, RelayBlockNumberOf, Reservations, SaleInfo, SaleInfoRecord,
+	SaleInfoRecordOf, SalePerformance, Status, StatusRecord, Timeslice,
 };
 
 // TODO: Extend the documentation.
@@ -214,12 +215,13 @@ impl<T: Config> Market<BalanceOf<T>, RelayBlockNumberOf<T>, AccountIdFor<T>> for
 			status.last_committed_timeslice = commit_timeslice;
 			if let Some(sale) = SaleInfo::<T>::get() {
 				if commit_timeslice >= sale.region_begin {
-					// TODO: call OnRotateSale.
-					Self::rotate_sale(sale, &config, &status);
+					let (new_prices, new_sale) = rotate_sale::<T>(&sale, &config, &status, now);
+					// TODO: call OnRotateSale (Market associated type).
+					Self::rotate_sale(sale, &new_sale, new_prices, &config, &status);
 				}
 			}
 
-			// TODO: Call some hook instead.
+			// TODO: Call some hook instead (and move the code somewhere else).
 			Self::process_pool(commit_timeslice, &mut status);
 
 			let timeslice_period = T::TimeslicePeriod::get();
@@ -287,4 +289,65 @@ fn latest_timeslice_ready_to_commit<T: Config>(
 	let advanced = now.saturating_add(config.advance_notice);
 	let timeslice_period = T::TimeslicePeriod::get();
 	(advanced / timeslice_period).saturated_into()
+}
+
+// TODO: Don't rely on the pallet config?
+fn adapt_prices<T: Config>(old_sale: &SaleInfoRecordOf<T>) -> AdaptedPrices<BalanceOf<T>> {
+	// Calculate the start price for the upcoming sale.
+	let new_prices = T::PriceAdapter::adapt_price(SalePerformance::from_sale(&old_sale));
+
+	log::debug!(
+		"Rotated sale, new prices: {:?}, {:?}",
+		new_prices.end_price,
+		new_prices.target_price
+	);
+
+	new_prices
+}
+
+// TODO: MUSTN'T BE PUB - it's a workaround to call it from the do_start_sales.
+pub fn rotate_sale<T: Config>(
+	old_sale: &SaleInfoRecordOf<T>,
+	config: &ConfigRecordOf<T>,
+	status: &StatusRecord,
+	now: RelayBlockNumberOf<T>,
+) -> (AdaptedPrices<BalanceOf<T>>, SaleInfoRecordOf<T>) {
+	let new_prices = adapt_prices::<T>(&old_sale);
+
+	// TODO: Move this logic somewhere else.
+	let first_core = Reservations::<T>::decode_len().unwrap_or_default() as u16 +
+		Leases::<T>::decode_len().unwrap_or_default() as u16;
+
+	let max_possible_sales = status.core_count.saturating_sub(first_core);
+	let limit_cores_offered = config.limit_cores_offered.unwrap_or(CoreIndex::max_value());
+	let cores_offered = limit_cores_offered.min(max_possible_sales);
+	let sale_start = now.saturating_add(config.interlude_length);
+	let leadin_length = config.leadin_length;
+	let ideal_cores_sold = (config.ideal_bulk_proportion * cores_offered as u32) as u16;
+	let sellout_price = if cores_offered > 0 {
+		// No core sold -> price was too high -> we have to adjust downwards.
+		Some(new_prices.end_price)
+	} else {
+		None
+	};
+
+	let region_begin = old_sale.region_end;
+	let region_end = region_begin + config.region_length;
+
+	let new_sale = SaleInfoRecord {
+		sale_start,
+		leadin_length,
+		end_price: new_prices.end_price,
+		sellout_price,
+		region_begin,
+		region_end,
+		first_core,
+		ideal_cores_sold,
+		cores_offered,
+		cores_sold: 0,
+	};
+
+	SaleInfo::<T>::put(&new_sale);
+
+	(new_prices, new_sale)
 }

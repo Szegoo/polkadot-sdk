@@ -139,11 +139,11 @@ impl<T: Config> Pallet<T> {
 	/// Triggered by Relay-chain block number/timeslice.
 	pub(crate) fn rotate_sale(
 		old_sale: SaleInfoRecordOf<T>,
+		new_sale: &SaleInfoRecordOf<T>,
+		new_prices: AdaptedPrices<BalanceOf<T>>,
 		config: &ConfigRecordOf<T>,
 		status: &StatusRecord,
 	) -> Option<()> {
-		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
-
 		let pool_item =
 			ScheduleItem { assignment: CoreAssignment::Pool, mask: CoreMask::complete() };
 		let just_pool = Schedule::truncate_from(vec![pool_item]);
@@ -158,16 +158,8 @@ impl<T: Config> Pallet<T> {
 		InstaPoolIo::<T>::mutate(old_sale.region_begin, |r| r.system.saturating_accrue(old_pooled));
 		InstaPoolIo::<T>::mutate(old_sale.region_end, |r| r.system.saturating_reduce(old_pooled));
 
-		// Calculate the start price for the upcoming sale.
-		let new_prices = T::PriceAdapter::adapt_price(SalePerformance::from_sale(&old_sale));
-
-		log::debug!(
-			"Rotated sale, new prices: {:?}, {:?}",
-			new_prices.end_price,
-			new_prices.target_price
-		);
-
 		// Set workload for the reserved (system, probably) workloads.
+		// TODO: Compute from the new sale.
 		let region_begin = old_sale.region_end;
 		let region_end = region_begin + config.region_length;
 
@@ -231,38 +223,9 @@ impl<T: Config> Pallet<T> {
 		});
 		Leases::<T>::put(&leases);
 
-		let max_possible_sales = status.core_count.saturating_sub(first_core);
-		let limit_cores_offered = config.limit_cores_offered.unwrap_or(CoreIndex::max_value());
-		let cores_offered = limit_cores_offered.min(max_possible_sales);
-		let sale_start = now.saturating_add(config.interlude_length);
-		let leadin_length = config.leadin_length;
-		let ideal_cores_sold = (config.ideal_bulk_proportion * cores_offered as u32) as u16;
-		let sellout_price = if cores_offered > 0 {
-			// No core sold -> price was too high -> we have to adjust downwards.
-			Some(new_prices.end_price)
-		} else {
-			None
-		};
+		Self::renew_cores(new_sale);
 
-		// Update SaleInfo
-		let new_sale = SaleInfoRecord {
-			sale_start,
-			leadin_length,
-			end_price: new_prices.end_price,
-			sellout_price,
-			region_begin,
-			region_end,
-			first_core,
-			ideal_cores_sold,
-			cores_offered,
-			cores_sold: 0,
-		};
-
-		SaleInfo::<T>::put(&new_sale);
-
-		Self::renew_cores(&new_sale);
-
-		// TODO: Determine the price.
+		// TODO.
 		// Self::deposit_event(Event::SaleInitialized {
 		// 	sale_start,
 		// 	leadin_length,

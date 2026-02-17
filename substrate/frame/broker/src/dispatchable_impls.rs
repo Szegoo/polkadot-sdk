@@ -139,7 +139,11 @@ impl<T: Config> Pallet<T> {
 			cores_sold: 0,
 		};
 		Self::deposit_event(Event::<T>::SalesStarted { price: end_price, core_count });
-		Self::rotate_sale(old_sale, &config, &status);
+
+		// TODO: Move this logic to the market impl.
+		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
+		let (new_prices, new_sale) = market::rotate_sale::<T>(&old_sale, &config, &status, now);
+		Self::rotate_sale(old_sale, &new_sale, new_prices, &config, &status);
 		Status::<T>::put(&status);
 		Ok(())
 	}
