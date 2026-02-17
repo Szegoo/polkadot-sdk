@@ -382,8 +382,7 @@ fn adapt_prices<T: Config>(old_sale: &SaleInfoRecordOf<T>) -> AdaptedPrices<Bala
 	new_prices
 }
 
-// TODO: MUSTN'T BE PUB - it's a workaround to call it from the do_start_sales.
-pub fn rotate_sale<T: Config>(
+fn rotate_sale<T: Config>(
 	old_sale: &SaleInfoRecordOf<T>,
 	config: &ConfigRecordOf<T>,
 	status: &StatusRecord,
