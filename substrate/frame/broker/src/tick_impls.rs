@@ -355,7 +355,7 @@ impl<T: Config> Pallet<T> {
 
 	fn process_market_logic() {
 		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
-		let result = <Self as Market<_, _, _>>::tick(now);
+		let result = <Self as Market<_, _, _, _, _>>::tick(now);
 
 		for action in result {
 			match action {
@@ -396,6 +396,27 @@ impl<T: Config> Pallet<T> {
 						price: BalanceOf::<T>::zero(), // TODO: Determine price?
 						duration,
 					});
+				},
+				TickAction::SaleRotated { old_sale, new_sale, new_prices } => {
+					// TODO: Figure out how to properly read status and config here.
+					let status = Status::<T>::get().unwrap();
+					let config = Configuration::<T>::get().unwrap();
+
+					Self::rotate_sale(old_sale, &new_sale, new_prices, &config, &status);
+				},
+				TickAction::TimesliceCommited { timeslice } => {
+					// TODO: Figure out how to properly read and write status here.
+					let mut status = Status::<T>::get().unwrap();
+
+					Self::process_pool(timeslice, &mut status);
+
+					let timeslice_period = T::TimeslicePeriod::get();
+					let rc_begin = RelayBlockNumberOf::<T>::from(timeslice) * timeslice_period;
+					for core in 0..status.core_count {
+						Self::process_core_schedule(timeslice, rc_begin, core);
+					}
+
+					Status::<T>::put(status);
 				},
 			}
 		}

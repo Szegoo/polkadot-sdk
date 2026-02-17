@@ -36,7 +36,7 @@ use crate::{
 /// - Every order will either create a bid or will be resolved immediately.
 /// - There're two types of orders: bulk coretime purchase and bulk coretime renewal.
 /// - Coretime regions are fungible.
-pub trait Market<Balance, RelayBlockNumber, AccountId> {
+pub trait Market<Balance, RelayBlockNumber, AccountId, SaleInfoRecord, AdaptedPrices> {
 	type Error: Into<DispatchError>;
 	/// Unique ID assigned to every bid.
 	type BidId;
@@ -82,7 +82,9 @@ pub trait Market<Balance, RelayBlockNumber, AccountId> {
 	) -> Result<CloseBidResult<AccountId, Balance>, Self::Error>;
 
 	/// Logic that gets called in `on_initialize` hook.
-	fn tick(now: RelayBlockNumber) -> Vec<TickAction<AccountId, Balance, Self::BidId>>;
+	fn tick(
+		now: RelayBlockNumber,
+	) -> Vec<TickAction<AccountId, Balance, Self::BidId, SaleInfoRecord, AdaptedPrices>>;
 }
 
 pub enum OrderResult<Balance, BidId> {
@@ -109,10 +111,12 @@ pub struct CloseBidResult<AccountId, Balance> {
 	pub owner: AccountId,
 	pub refund: Balance,
 }
-pub enum TickAction<AccountId, Balance, BidId> {
+pub enum TickAction<AccountId, Balance, BidId, SaleInfoRecord, AdaptedPrices> {
 	SellRegion { owner: AccountId, refund: Balance },
 	RenewRegion { owner: AccountId, renewal_id: PotentialRenewalId, refund: Balance },
 	BidClosed { id: BidId, refund: Balance, owner: AccountId },
+	SaleRotated { old_sale: SaleInfoRecord, new_sale: SaleInfoRecord, new_prices: AdaptedPrices },
+	TimesliceCommited { timeslice: Timeslice },
 }
 
 pub enum MarketError {
@@ -132,7 +136,15 @@ impl From<MarketError> for DispatchError {
 	}
 }
 
-impl<T: Config> Market<BalanceOf<T>, RelayBlockNumberOf<T>, AccountIdFor<T>> for Pallet<T> {
+impl<T: Config>
+	Market<
+		BalanceOf<T>,
+		RelayBlockNumberOf<T>,
+		AccountIdFor<T>,
+		SaleInfoRecordOf<T>,
+		AdaptedPrices<BalanceOf<T>>,
+	> for Pallet<T>
+{
 	type Error = MarketError;
 	/// Must be unique.
 	type BidId = ();
@@ -249,36 +261,41 @@ impl<T: Config> Market<BalanceOf<T>, RelayBlockNumberOf<T>, AccountIdFor<T>> for
 	}
 
 	fn tick(
-		now: RelayBlockNumberOf<T>,
-	) -> Vec<TickAction<AccountIdFor<T>, BalanceOf<T>, Self::BidId>> {
+		block_number: RelayBlockNumberOf<T>,
+	) -> Vec<
+		TickAction<
+			AccountIdFor<T>,
+			BalanceOf<T>,
+			Self::BidId,
+			SaleInfoRecordOf<T>,
+			AdaptedPrices<BalanceOf<T>>,
+		>,
+	> {
 		// TODO: Store `config.renewal_bump` in the market config.
 		let config = Configuration::<T>::get().unwrap();
 		// TODO: don't read status here.
 		let mut status = Status::<T>::get().unwrap();
 
-		if let Some(commit_timeslice) = Self::next_timeslice_to_commit(&config, &status) {
+		let mut actions = vec![];
+
+		if let Some(commit_timeslice) =
+			next_timeslice_to_commit::<T>(block_number, &config, &status)
+		{
 			status.last_committed_timeslice = commit_timeslice;
 			if let Some(sale) = SaleInfo::<T>::get() {
 				if commit_timeslice >= sale.region_begin {
-					let (new_prices, new_sale) = rotate_sale::<T>(&sale, &config, &status, now);
-					// TODO: call OnRotateSale (Market associated type).
-					Self::rotate_sale(sale, &new_sale, new_prices, &config, &status);
+					let (new_prices, new_sale) =
+						rotate_sale::<T>(&sale, &config, &status, block_number);
+					actions.push(TickAction::SaleRotated { old_sale: sale, new_sale, new_prices });
 				}
 			}
 
-			// TODO: Call some hook instead (and move the code somewhere else).
-			Self::process_pool(commit_timeslice, &mut status);
-
-			let timeslice_period = T::TimeslicePeriod::get();
-			let rc_begin = RelayBlockNumberOf::<T>::from(commit_timeslice) * timeslice_period;
-			for core in 0..status.core_count {
-				Self::process_core_schedule(commit_timeslice, rc_begin, core);
-			}
+			actions.push(TickAction::TimesliceCommited { timeslice: commit_timeslice });
 		}
 
 		Status::<T>::put(status);
 
-		vec![]
+		actions
 	}
 }
 

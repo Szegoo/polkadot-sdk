@@ -16,7 +16,7 @@
 // limitations under the License.
 
 use crate::{
-	Config, CoreAssignment, CoreIndex, CoreMask, CoretimeInterface, Market, Pallet,
+	AdaptedPrices, Config, CoreAssignment, CoreIndex, CoreMask, CoretimeInterface, Market, Pallet,
 	RCBlockNumberOf, TaskId, CORE_MASK_BITS,
 };
 use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
@@ -31,8 +31,13 @@ pub type BalanceOf<T> = <<T as Config>::Currency as Inspect<<T as SConfig>::Acco
 pub type RelayBalanceOf<T> = <<T as Config>::Coretime as CoretimeInterface>::Balance;
 pub type RelayBlockNumberOf<T> = RCBlockNumberOf<<T as Config>::Coretime>;
 pub type RelayAccountIdOf<T> = <<T as Config>::Coretime as CoretimeInterface>::AccountId;
-pub type BidIdOf<T> =
-	<Pallet<T> as Market<BalanceOf<T>, RelayBlockNumberOf<T>, AccountIdFor<T>>>::BidId;
+pub type BidIdOf<T> = <Pallet<T> as Market<
+	BalanceOf<T>,
+	RelayBlockNumberOf<T>,
+	AccountIdFor<T>,
+	SaleInfoRecordOf<T>,
+	AdaptedPrices<BalanceOf<T>>,
+>>::BidId;
 
 /// Relay-chain block number with a fixed divisor of Config::TimeslicePeriod.
 pub type Timeslice = u32;
