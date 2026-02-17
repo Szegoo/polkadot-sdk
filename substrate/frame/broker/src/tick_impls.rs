@@ -134,7 +134,6 @@ impl<T: Config> Pallet<T> {
 		true
 	}
 
-	// TODO: Check why an option is returned here.
 	/// Begin selling for the next sale period.
 	///
 	/// Triggered by Relay-chain block number/timeslice.
@@ -143,7 +142,7 @@ impl<T: Config> Pallet<T> {
 		new_sale: &SaleInfoRecordOf<T>,
 		new_prices: AdaptedPrices<BalanceOf<T>>,
 		status: &StatusRecord,
-	) -> Option<()> {
+	) {
 		let pool_item =
 			ScheduleItem { assignment: CoreAssignment::Pool, mask: CoreMask::complete() };
 		let just_pool = Schedule::truncate_from(vec![pool_item]);
@@ -234,8 +233,6 @@ impl<T: Config> Pallet<T> {
 		// 	ideal_cores_sold,
 		// 	cores_offered,
 		// });
-
-		Some(())
 	}
 
 	pub(crate) fn process_pool(when: Timeslice, status: &mut StatusRecord) {
