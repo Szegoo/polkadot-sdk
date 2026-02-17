@@ -46,7 +46,7 @@ pub trait Market<Balance, RelayBlockNumber, AccountId, SaleInfoRecord, AdaptedPr
 		block_number: RelayBlockNumber,
 		end_price: Balance,
 		core_count: u16,
-	) -> Result<Vec<StartSalesEvent<SaleInfoRecord, AdaptedPrices>>, Self::Error>;
+	) -> Result<Vec<StartSalesEvent<SaleInfoRecord, AdaptedPrices, Balance>>, Self::Error>;
 
 	/// Place an order for one bulk coretime region purchase.
 	///
@@ -112,18 +112,41 @@ pub struct CloseBidResult<AccountId, Balance> {
 	pub refund: Balance,
 }
 pub enum TickAction<AccountId, Balance, BidId, SaleInfoRecord, AdaptedPrices> {
-	SellRegion { owner: AccountId, refund: Balance },
-	RenewRegion { owner: AccountId, renewal_id: PotentialRenewalId, refund: Balance },
-	BidClosed { id: BidId, refund: Balance, owner: AccountId },
-	SaleRotated { old_sale: SaleInfoRecord, new_sale: SaleInfoRecord, new_prices: AdaptedPrices },
-	TimesliceCommited { timeslice: Timeslice },
+	SellRegion {
+		owner: AccountId,
+		refund: Balance,
+	},
+	RenewRegion {
+		owner: AccountId,
+		renewal_id: PotentialRenewalId,
+		refund: Balance,
+	},
+	BidClosed {
+		id: BidId,
+		refund: Balance,
+		owner: AccountId,
+	},
+	SaleRotated {
+		old_sale: SaleInfoRecord,
+		new_sale: SaleInfoRecord,
+		new_prices: AdaptedPrices,
+		// TODO: Deprecate it as it doesn't fit into the general market impl but used when emitting
+		// an event.
+		start_price: Balance,
+	},
+	TimesliceCommited {
+		timeslice: Timeslice,
+	},
 }
 
-pub enum StartSalesEvent<SaleInfoRecord, AdaptedPrices> {
+pub enum StartSalesEvent<SaleInfoRecord, AdaptedPrices, Balance> {
 	SalesStarted {
 		imaginary_old_sale: SaleInfoRecord,
 		new_sale: SaleInfoRecord,
 		new_prices: AdaptedPrices,
+		// TODO: Deprecate it as it doesn't fit into the general market impl but used when emitting
+		// an event.
+		start_price: Balance,
 	},
 }
 
@@ -161,8 +184,10 @@ impl<T: Config>
 		block_number: RelayBlockNumberOf<T>,
 		end_price: BalanceOf<T>,
 		core_count: u16,
-	) -> Result<Vec<StartSalesEvent<SaleInfoRecordOf<T>, AdaptedPrices<BalanceOf<T>>>>, Self::Error>
-	{
+	) -> Result<
+		Vec<StartSalesEvent<SaleInfoRecordOf<T>, AdaptedPrices<BalanceOf<T>>, BalanceOf<T>>>,
+		Self::Error,
+	> {
 		let config = Configuration::<T>::get().ok_or(MarketError::Uninitialized)?;
 
 		let commit_timeslice = latest_timeslice_ready_to_commit::<T>(block_number, &config);
@@ -191,8 +216,14 @@ impl<T: Config>
 
 		Status::<T>::put(&status);
 
-		let event =
-			StartSalesEvent::SalesStarted { imaginary_old_sale: old_sale, new_sale, new_prices };
+		let start_price = sell_price::<T>(block_number, &new_sale);
+
+		let event = StartSalesEvent::SalesStarted {
+			imaginary_old_sale: old_sale,
+			new_sale,
+			new_prices,
+			start_price,
+		};
 
 		Ok(vec![event])
 	}
@@ -211,7 +242,7 @@ impl<T: Config>
 
 		ensure!(block_number > sale.sale_start, MarketError::TooEarly);
 
-		let sell_price = sell_price::<T>(block_number, &sale)?;
+		let sell_price = sell_price::<T>(block_number, &sale);
 
 		if price_limit < sell_price {
 			return Err(MarketError::Overpriced)
@@ -248,7 +279,7 @@ impl<T: Config>
 
 		let price_cap =
 			cmp::max(recorded_price + config.renewal_bump * recorded_price, sale.end_price);
-		let sell_price = sell_price::<T>(block_number, &sale)?;
+		let sell_price = sell_price::<T>(block_number, &sale);
 		let next_renewal_price = sell_price.min(price_cap);
 
 		let core = purchase_core::<T>(who, recorded_price, &mut sale);
@@ -296,7 +327,13 @@ impl<T: Config>
 				if commit_timeslice >= sale.region_begin {
 					let (new_prices, new_sale) =
 						rotate_sale::<T>(&sale, &config, &status, block_number);
-					actions.push(TickAction::SaleRotated { old_sale: sale, new_sale, new_prices });
+					let start_price = sell_price::<T>(block_number, &new_sale);
+					actions.push(TickAction::SaleRotated {
+						old_sale: sale,
+						new_sale,
+						new_prices,
+						start_price,
+					});
 				}
 			}
 
@@ -322,16 +359,10 @@ fn purchase_core<T: Config>(
 	core
 }
 
-fn sell_price<T: Config>(
-	now: RelayBlockNumberOf<T>,
-	sale: &SaleInfoRecordOf<T>,
-) -> Result<BalanceOf<T>, MarketError> {
-	// TODO: Store this info in the dedicated storage item?
-	let sale = SaleInfo::<T>::get().ok_or(MarketError::NoSales)?;
-
+fn sell_price<T: Config>(now: RelayBlockNumberOf<T>, sale: &SaleInfoRecordOf<T>) -> BalanceOf<T> {
 	let num = now.saturating_sub(sale.sale_start).min(sale.leadin_length).saturated_into();
 	let through = FixedU64::from_rational(num, sale.leadin_length.saturated_into());
-	Ok(leadin_factor_at(through).saturating_mul_int(sale.end_price))
+	leadin_factor_at(through).saturating_mul_int(sale.end_price)
 }
 
 fn leadin_factor_at(when: FixedU64) -> FixedU64 {

@@ -119,11 +119,22 @@ impl<T: Config> Pallet<T> {
 
 		for event in events {
 			match event {
-				StartSalesEvent::SalesStarted { imaginary_old_sale, new_sale, new_prices } => {
+				StartSalesEvent::SalesStarted {
+					imaginary_old_sale,
+					new_sale,
+					new_prices,
+					start_price,
+				} => {
 					// TODO: Don't read status here.
 					let status = Status::<T>::get().ok_or(Error::<T>::Uninitialized)?;
 
-					Self::rotate_sale(&imaginary_old_sale, &new_sale, new_prices, &status);
+					Self::rotate_sale(
+						&imaginary_old_sale,
+						&new_sale,
+						new_prices,
+						start_price,
+						&status,
+					);
 				},
 			}
 		}

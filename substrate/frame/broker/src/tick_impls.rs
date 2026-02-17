@@ -141,6 +141,7 @@ impl<T: Config> Pallet<T> {
 		old_sale: &SaleInfoRecordOf<T>,
 		new_sale: &SaleInfoRecordOf<T>,
 		new_prices: AdaptedPrices<BalanceOf<T>>,
+		start_price: BalanceOf<T>,
 		status: &StatusRecord,
 	) {
 		let pool_item =
@@ -222,17 +223,16 @@ impl<T: Config> Pallet<T> {
 
 		Self::renew_cores(new_sale);
 
-		// TODO.
-		// Self::deposit_event(Event::SaleInitialized {
-		// 	sale_start,
-		// 	leadin_length,
-		// 	start_price: Self::sale_price(&new_sale, now),
-		// 	end_price: new_prices.end_price,
-		// 	region_begin,
-		// 	region_end,
-		// 	ideal_cores_sold,
-		// 	cores_offered,
-		// });
+		Self::deposit_event(Event::SaleInitialized {
+			sale_start: new_sale.sale_start,
+			leadin_length: new_sale.leadin_length,
+			start_price,
+			end_price: new_prices.end_price,
+			region_begin: new_sale.region_begin,
+			region_end: new_sale.region_end,
+			ideal_cores_sold: new_sale.ideal_cores_sold,
+			cores_offered: new_sale.cores_offered,
+		});
 	}
 
 	pub(crate) fn process_pool(when: Timeslice, status: &mut StatusRecord) {
@@ -394,11 +394,11 @@ impl<T: Config> Pallet<T> {
 						duration,
 					});
 				},
-				TickAction::SaleRotated { old_sale, new_sale, new_prices } => {
+				TickAction::SaleRotated { old_sale, new_sale, new_prices, start_price } => {
 					// TODO: Figure out how to properly read status here.
 					let status = Status::<T>::get().unwrap();
 
-					Self::rotate_sale(&old_sale, &new_sale, new_prices, &status);
+					Self::rotate_sale(&old_sale, &new_sale, new_prices, start_price, &status);
 				},
 				TickAction::TimesliceCommited { timeslice } => {
 					// TODO: Figure out how to properly read and write status here.
