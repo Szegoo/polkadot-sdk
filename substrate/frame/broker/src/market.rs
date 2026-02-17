@@ -115,6 +115,9 @@ pub enum TickAction<AccountId, Balance, BidId, SaleInfoRecord, AdaptedPrices> {
 	SellRegion {
 		owner: AccountId,
 		refund: Balance,
+		region_begin: Timeslice,
+		region_end: Timeslice,
+		core: CoreIndex,
 	},
 	RenewRegion {
 		owner: AccountId,
