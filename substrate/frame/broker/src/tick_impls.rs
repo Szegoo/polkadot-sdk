@@ -316,7 +316,6 @@ impl<T: Config> Pallet<T> {
 
 				let renew_result = Self::do_renew(payer.clone(), record.core);
 				match renew_result {
-					// TODO: How is it guaranteed that it's still sorted by core?
 					Ok(DoRenewResult::Renewed { new_core }) => Some(AutoRenewalRecord {
 						core: new_core,
 						task: record.task,
