@@ -151,7 +151,7 @@ impl<T: Config> Pallet<T> {
 		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
 		match Self::place_order(now, &who, price_limit)? {
 			OrderResult::BidPlaced { id, bid_price } => {
-				Self::charge(&who, bid_price)?;
+				Self::lock_funds(&who, bid_price)?;
 
 				Self::deposit_event(Event::BidPlaced { bid_id: id, price: bid_price });
 			},
@@ -193,7 +193,7 @@ impl<T: Config> Pallet<T> {
 		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
 		match Self::place_renewal_order(now, &who, renewal_id, record.price)? {
 			RenewalOrderResult::BidPlaced { id, bid_price } => {
-				Self::charge(&who, bid_price)?;
+				Self::lock_funds(&who, bid_price)?;
 
 				Self::deposit_event(Event::BidPlaced { bid_id: id, price: bid_price });
 

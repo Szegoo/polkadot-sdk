@@ -59,11 +59,14 @@ impl<T: Config> Pallet<T> {
 		T::PalletId::get().into_account_truncating()
 	}
 
-	// TODO: Differentiate between revenue and locking (revenue is from selling, locking is from
-	// bidding).
 	pub(crate) fn charge(who: &T::AccountId, amount: BalanceOf<T>) -> DispatchResult {
 		let credit = T::Currency::withdraw(&who, amount, Exact, Expendable, Polite)?;
 		T::OnRevenue::on_unbalanced(credit);
+		Ok(())
+	}
+
+	pub(crate) fn lock_funds(who: &T::AccountId, amount: BalanceOf<T>) -> DispatchResult {
+		T::Currency::withdraw(&who, amount, Exact, Expendable, Polite)?;
 		Ok(())
 	}
 
@@ -72,6 +75,7 @@ impl<T: Config> Pallet<T> {
 		Ok(())
 	}
 
+	// TODO: Move this to market impl.
 	/// Buy a core at the specified price (price is to be determined by the caller).
 	///
 	/// Note: It is the responsibility of the caller to write back the changed `SaleInfoRecordOf` to
