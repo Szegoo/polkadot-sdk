@@ -20,7 +20,7 @@ use frame_support::ensure;
 use frame_system::pallet_prelude::AccountIdFor;
 use sp_arithmetic::FixedPointNumber;
 use sp_core::Get;
-use sp_runtime::{DispatchError, FixedU64, SaturatedConversion, Saturating};
+use sp_runtime::{traits::Zero, DispatchError, FixedU64, SaturatedConversion, Saturating};
 
 use crate::{
 	AdaptPrice, AdaptedPrices, BalanceOf, Config, ConfigRecordOf, Configuration, CoreIndex, Leases,
@@ -40,6 +40,13 @@ pub trait Market<Balance, RelayBlockNumber, AccountId> {
 	type Error: Into<DispatchError>;
 	/// Unique ID assigned to every bid.
 	type BidId;
+
+	// TODO: Unify the interface.
+	fn start_sales(
+		block_number: RelayBlockNumber,
+		end_price: Balance,
+		core_count: u16,
+	) -> Result<(), Self::Error>;
 
 	/// Place an order for one bulk coretime region purchase.
 	///
@@ -129,6 +136,44 @@ impl<T: Config> Market<BalanceOf<T>, RelayBlockNumberOf<T>, AccountIdFor<T>> for
 	type Error = MarketError;
 	/// Must be unique.
 	type BidId = ();
+
+	fn start_sales(
+		block_number: RelayBlockNumberOf<T>,
+		end_price: BalanceOf<T>,
+		core_count: u16,
+	) -> Result<(), Self::Error> {
+		let config = Configuration::<T>::get().ok_or(MarketError::Uninitialized)?;
+
+		let commit_timeslice = latest_timeslice_ready_to_commit::<T>(block_number, &config);
+		let status = StatusRecord {
+			core_count,
+			private_pool_size: 0,
+			system_pool_size: 0,
+			last_committed_timeslice: commit_timeslice.saturating_sub(1),
+			last_timeslice: current_timeslice::<T>(block_number),
+		};
+		// Imaginary old sale for bootstrapping the first actual sale:
+		let old_sale = SaleInfoRecord {
+			sale_start: block_number,
+			leadin_length: Zero::zero(),
+			end_price,
+			sellout_price: None,
+			region_begin: commit_timeslice,
+			region_end: commit_timeslice.saturating_add(config.region_length),
+			first_core: 0,
+			ideal_cores_sold: 0,
+			cores_offered: 0,
+			cores_sold: 0,
+		};
+
+		let (new_prices, new_sale) = rotate_sale::<T>(&old_sale, &config, &status, block_number);
+		// TODO: call OnRotateSale (Market associated type).
+		Self::rotate_sale(old_sale, &new_sale, new_prices, &config, &status);
+
+		Status::<T>::put(&status);
+
+		Ok(())
+	}
 
 	fn place_order(
 		block_number: RelayBlockNumberOf<T>,
@@ -268,6 +313,11 @@ fn leadin_factor_at(when: FixedU64) -> FixedU64 {
 	} else {
 		FixedU64::from(19).saturating_sub(when.saturating_mul(18.into()))
 	}
+}
+
+fn current_timeslice<T: Config>(now: RelayBlockNumberOf<T>) -> Timeslice {
+	let timeslice_period = T::TimeslicePeriod::get();
+	(now / timeslice_period).saturated_into()
 }
 
 fn next_timeslice_to_commit<T: Config>(

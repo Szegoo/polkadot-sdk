@@ -107,8 +107,6 @@ impl<T: Config> Pallet<T> {
 		end_price: BalanceOf<T>,
 		extra_cores: CoreIndex,
 	) -> DispatchResult {
-		let config = Configuration::<T>::get().ok_or(Error::<T>::Uninitialized)?;
-
 		// Determine the core count
 		let core_count = Leases::<T>::decode_len().unwrap_or(0) as CoreIndex +
 			Reservations::<T>::decode_len().unwrap_or(0) as CoreIndex +
@@ -116,35 +114,14 @@ impl<T: Config> Pallet<T> {
 
 		Self::do_request_core_count(core_count)?;
 
-		let commit_timeslice = Self::latest_timeslice_ready_to_commit(&config);
-		let status = StatusRecord {
-			core_count,
-			private_pool_size: 0,
-			system_pool_size: 0,
-			last_committed_timeslice: commit_timeslice.saturating_sub(1),
-			last_timeslice: Self::current_timeslice(),
-		};
 		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
-		// Imaginary old sale for bootstrapping the first actual sale:
-		let old_sale = SaleInfoRecord {
-			sale_start: now,
-			leadin_length: Zero::zero(),
-			end_price,
-			sellout_price: None,
-			region_begin: commit_timeslice,
-			region_end: commit_timeslice.saturating_add(config.region_length),
-			first_core: 0,
-			ideal_cores_sold: 0,
-			cores_offered: 0,
-			cores_sold: 0,
-		};
-		Self::deposit_event(Event::<T>::SalesStarted { price: end_price, core_count });
+		<Self as Market<BalanceOf<T>, RelayBlockNumberOf<T>, T::AccountId>>::start_sales(
+			now, end_price, core_count,
+		)?;
 
-		// TODO: Move this logic to the market impl.
-		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
-		let (new_prices, new_sale) = market::rotate_sale::<T>(&old_sale, &config, &status, now);
-		Self::rotate_sale(old_sale, &new_sale, new_prices, &config, &status);
-		Status::<T>::put(&status);
+		// TODO.
+		//Self::deposit_event(Event::<T>::SalesStarted { price: end_price, core_count });
+
 		Ok(())
 	}
 
