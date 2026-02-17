@@ -134,14 +134,14 @@ impl<T: Config> Pallet<T> {
 		true
 	}
 
+	// TODO: Check why an option is returned here.
 	/// Begin selling for the next sale period.
 	///
 	/// Triggered by Relay-chain block number/timeslice.
 	pub(crate) fn rotate_sale(
-		old_sale: SaleInfoRecordOf<T>,
+		old_sale: &SaleInfoRecordOf<T>,
 		new_sale: &SaleInfoRecordOf<T>,
 		new_prices: AdaptedPrices<BalanceOf<T>>,
-		config: &ConfigRecordOf<T>,
 		status: &StatusRecord,
 	) -> Option<()> {
 		let pool_item =
@@ -398,11 +398,10 @@ impl<T: Config> Pallet<T> {
 					});
 				},
 				TickAction::SaleRotated { old_sale, new_sale, new_prices } => {
-					// TODO: Figure out how to properly read status and config here.
+					// TODO: Figure out how to properly read status here.
 					let status = Status::<T>::get().unwrap();
-					let config = Configuration::<T>::get().unwrap();
 
-					Self::rotate_sale(old_sale, &new_sale, new_prices, &config, &status);
+					Self::rotate_sale(&old_sale, &new_sale, new_prices, &status);
 				},
 				TickAction::TimesliceCommited { timeslice } => {
 					// TODO: Figure out how to properly read and write status here.

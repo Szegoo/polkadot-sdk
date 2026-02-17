@@ -46,7 +46,7 @@ pub trait Market<Balance, RelayBlockNumber, AccountId, SaleInfoRecord, AdaptedPr
 		block_number: RelayBlockNumber,
 		end_price: Balance,
 		core_count: u16,
-	) -> Result<(), Self::Error>;
+	) -> Result<Vec<StartSalesEvent<SaleInfoRecord, AdaptedPrices>>, Self::Error>;
 
 	/// Place an order for one bulk coretime region purchase.
 	///
@@ -119,6 +119,14 @@ pub enum TickAction<AccountId, Balance, BidId, SaleInfoRecord, AdaptedPrices> {
 	TimesliceCommited { timeslice: Timeslice },
 }
 
+pub enum StartSalesEvent<SaleInfoRecord, AdaptedPrices> {
+	SalesStarted {
+		imaginary_old_sale: SaleInfoRecord,
+		new_sale: SaleInfoRecord,
+		new_prices: AdaptedPrices,
+	},
+}
+
 pub enum MarketError {
 	NoSales,
 	Overpriced,
@@ -153,7 +161,8 @@ impl<T: Config>
 		block_number: RelayBlockNumberOf<T>,
 		end_price: BalanceOf<T>,
 		core_count: u16,
-	) -> Result<(), Self::Error> {
+	) -> Result<Vec<StartSalesEvent<SaleInfoRecordOf<T>, AdaptedPrices<BalanceOf<T>>>>, Self::Error>
+	{
 		let config = Configuration::<T>::get().ok_or(MarketError::Uninitialized)?;
 
 		let commit_timeslice = latest_timeslice_ready_to_commit::<T>(block_number, &config);
@@ -179,12 +188,13 @@ impl<T: Config>
 		};
 
 		let (new_prices, new_sale) = rotate_sale::<T>(&old_sale, &config, &status, block_number);
-		// TODO: call OnRotateSale (Market associated type).
-		Self::rotate_sale(old_sale, &new_sale, new_prices, &config, &status);
 
 		Status::<T>::put(&status);
 
-		Ok(())
+		let event =
+			StartSalesEvent::SalesStarted { imaginary_old_sale: old_sale, new_sale, new_prices };
+
+		Ok(vec![event])
 	}
 
 	fn place_order(
