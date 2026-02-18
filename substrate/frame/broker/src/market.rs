@@ -171,10 +171,17 @@ pub enum MarketError {
 	SoldOut,
 }
 
-// TODO: Proper conversion
 impl From<MarketError> for DispatchError {
 	fn from(value: MarketError) -> Self {
-		DispatchError::Other("TODO")
+		match value {
+			MarketError::NoSales => Self::Other("NoSales"),
+			MarketError::Overpriced => Self::Other("Overpriced"),
+			MarketError::BidNotExist => Self::Other("BidNotExist"),
+			MarketError::Uninitialized => Self::Other("Uninitialized"),
+			MarketError::TooEarly => Self::Other("TooEarly"),
+			MarketError::Unavailable => Self::Other("Unavailable"),
+			MarketError::SoldOut => Self::Other("SoldOut"),
+		}
 	}
 }
 

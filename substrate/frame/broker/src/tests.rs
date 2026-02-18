@@ -418,14 +418,14 @@ fn renewal_works() {
 		advance_to(6);
 		assert_noop!(
 			do_purchase_and_get_region_id(1, u64::max_value()),
-			DispatchError::Other("TODO")
+			DispatchError::Other("TooEarly")
 		);
 		let core = do_renew_and_get_the_new_core(1, region.core).unwrap();
 		assert_eq!(balance(1), 99_800);
 		advance_to(8);
 		assert_noop!(
 			do_purchase_and_get_region_id(1, u64::max_value()),
-			DispatchError::Other("TODO")
+			DispatchError::Other("SoldOut")
 		);
 		advance_to(12);
 		assert_ok!(Broker::do_renew(1, core));
@@ -466,7 +466,7 @@ fn renewals_affect_price() {
 		advance_to(40);
 		assert_noop!(
 			do_purchase_and_get_region_id(1, u64::max_value()),
-			DispatchError::Other("TODO")
+			DispatchError::Other("TooEarly")
 		);
 		let core = do_renew_and_get_the_new_core(1, region.core).unwrap();
 		// First renewal has same price as initial purchase.
@@ -475,7 +475,7 @@ fn renewals_affect_price() {
 		advance_to(51);
 		assert_noop!(
 			do_purchase_and_get_region_id(1, u64::max_value()),
-			DispatchError::Other("TODO")
+			DispatchError::Other("SoldOut")
 		);
 		advance_to(81);
 		assert_ok!(Broker::do_renew(1, core));
@@ -539,7 +539,7 @@ fn renewal_price_adjusts_to_lower_market_end() {
 			advance_to(region_length_blocks);
 			assert_noop!(
 				do_purchase_and_get_region_id(1, u64::max_value()),
-				DispatchError::Other("TODO")
+				DispatchError::Other("TooEarly")
 			);
 
 			let core = do_renew_and_get_the_new_core(1, region.core).unwrap();
@@ -1698,7 +1698,7 @@ fn remove_lease_works() {
 #[test]
 fn purchase_requires_valid_status_and_sale_info() {
 	TestExt::new().execute_with(|| {
-		assert_noop!(do_purchase_and_get_region_id(1, 100), DispatchError::Other("TODO"));
+		assert_noop!(do_purchase_and_get_region_id(1, 100), DispatchError::Other("NoSales"));
 
 		let status = StatusRecord {
 			core_count: 2,
@@ -1708,7 +1708,7 @@ fn purchase_requires_valid_status_and_sale_info() {
 			last_timeslice: 1,
 		};
 		Status::<Test>::put(&status);
-		assert_noop!(do_purchase_and_get_region_id(1, 100), DispatchError::Other("TODO"));
+		assert_noop!(do_purchase_and_get_region_id(1, 100), DispatchError::Other("NoSales"));
 
 		let mut dummy_sale = SaleInfoRecord {
 			sale_start: 0,
@@ -1723,17 +1723,17 @@ fn purchase_requires_valid_status_and_sale_info() {
 			cores_sold: 2,
 		};
 		SaleInfo::<Test>::put(&dummy_sale);
-		assert_noop!(do_purchase_and_get_region_id(1, 100), DispatchError::Other("TODO"));
+		assert_noop!(do_purchase_and_get_region_id(1, 100), DispatchError::Other("Unavailable"));
 
 		dummy_sale.first_core = 1;
 		SaleInfo::<Test>::put(&dummy_sale);
-		assert_noop!(do_purchase_and_get_region_id(1, 100), DispatchError::Other("TODO"));
+		assert_noop!(do_purchase_and_get_region_id(1, 100), DispatchError::Other("SoldOut"));
 
 		assert_ok!(Broker::do_start_sales(200, 1));
-		assert_noop!(do_purchase_and_get_region_id(1, 100), DispatchError::Other("TODO"));
+		assert_noop!(do_purchase_and_get_region_id(1, 100), DispatchError::Other("TooEarly"));
 
 		advance_to(2);
-		assert_noop!(do_purchase_and_get_region_id(1, 100), DispatchError::Other("TODO"));
+		assert_noop!(do_purchase_and_get_region_id(1, 100), DispatchError::Other("Overpriced"));
 	});
 }
 
