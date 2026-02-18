@@ -114,6 +114,9 @@ pub struct CloseBidResult<AccountId, Balance> {
 pub enum TickAction<AccountId, Balance, BidId, SaleInfoRecord, AdaptedPrices> {
 	SellRegion {
 		owner: AccountId,
+		/// How much was paid for this region in total.
+		paid: Balance,
+		/// How much needs to be refunded to the user.
 		refund: Balance,
 		region_begin: Timeslice,
 		region_end: Timeslice,

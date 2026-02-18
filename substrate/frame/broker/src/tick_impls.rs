@@ -371,7 +371,7 @@ impl<T: Config> Pallet<T> {
 					// TODO: Process error.
 					Self::do_renew(owner, renewal_id.core);
 				},
-				TickAction::SellRegion { owner, refund, region_begin, region_end, core } => {
+				TickAction::SellRegion { owner, paid, refund, region_begin, region_end, core } => {
 					// TODO: Process error.
 					Self::refund(&owner, refund);
 
@@ -381,13 +381,13 @@ impl<T: Config> Pallet<T> {
 						CoreMask::complete(),
 						region_end,
 						Some(owner.clone()),
-						None, // TODO: Determine `paid`?
+						Some(paid),
 					);
 					let duration = region_end.saturating_sub(region_begin);
 					Self::deposit_event(Event::Purchased {
 						who: owner,
 						region_id: id,
-						price: BalanceOf::<T>::zero(), // TODO: Determine price?
+						price: paid,
 						duration,
 					});
 				},
