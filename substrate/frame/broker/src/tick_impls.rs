@@ -355,7 +355,7 @@ impl<T: Config> Pallet<T> {
 
 	fn process_market_logic() {
 		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
-		let result = <Self as Market<_, _, _, _, _>>::tick(now);
+		let result = <Self as Market<_, _, _, _, _, _>>::tick(now);
 
 		for action in result {
 			match action {

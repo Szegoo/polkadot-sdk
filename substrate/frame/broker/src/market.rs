@@ -21,6 +21,7 @@ use frame_system::pallet_prelude::AccountIdFor;
 use sp_arithmetic::FixedPointNumber;
 use sp_core::Get;
 use sp_runtime::{traits::Zero, DispatchError, FixedU64, SaturatedConversion, Saturating};
+use std::marker::PhantomData;
 
 use crate::{
 	AdaptPrice, AdaptedPrices, BalanceOf, Config, ConfigRecordOf, Configuration, CoreIndex, Leases,
@@ -36,10 +37,11 @@ use crate::{
 /// - Every order will either create a bid or will be resolved immediately.
 /// - There're two types of orders: bulk coretime purchase and bulk coretime renewal.
 /// - Coretime regions are fungible.
-pub trait Market<Balance, RelayBlockNumber, AccountId, SaleInfoRecord, AdaptedPrices> {
+pub trait Market<Balance, RelayBlockNumber, AccountId, SaleInfoRecord, AdaptedPrices, T: Config> {
 	type Error: Into<DispatchError>;
 	/// Unique ID assigned to every bid.
 	type BidId;
+	type CoreCount: CoreCountProvider<T>;
 
 	// TODO: Unify the interface.
 	fn start_sales(
@@ -85,6 +87,10 @@ pub trait Market<Balance, RelayBlockNumber, AccountId, SaleInfoRecord, AdaptedPr
 	fn tick(
 		now: RelayBlockNumber,
 	) -> Vec<TickAction<AccountId, Balance, Self::BidId, SaleInfoRecord, AdaptedPrices>>;
+}
+
+pub trait CoreCountProvider<T: Config> {
+	fn reserved_core_count() -> CoreIndex;
 }
 
 pub enum OrderResult<Balance, BidId> {
@@ -180,11 +186,13 @@ impl<T: Config>
 		AccountIdFor<T>,
 		SaleInfoRecordOf<T>,
 		AdaptedPrices<BalanceOf<T>>,
+		T,
 	> for Pallet<T>
 {
 	type Error = MarketError;
 	/// Must be unique.
 	type BidId = ();
+	type CoreCount = CoreCountProviderImpl<T>;
 
 	fn start_sales(
 		block_number: RelayBlockNumberOf<T>,
@@ -218,7 +226,9 @@ impl<T: Config>
 			cores_sold: 0,
 		};
 
-		let (new_prices, new_sale) = rotate_sale::<T>(&old_sale, &config, &status, block_number);
+		let reserved_cores = Self::CoreCount::reserved_core_count();
+		let (new_prices, new_sale) =
+			rotate_sale::<T>(&old_sale, &config, &status, reserved_cores, block_number);
 
 		Status::<T>::put(&status);
 
@@ -331,8 +341,9 @@ impl<T: Config>
 			status.last_committed_timeslice = commit_timeslice;
 			if let Some(sale) = SaleInfo::<T>::get() {
 				if commit_timeslice >= sale.region_begin {
+					let reserved_cores = Self::CoreCount::reserved_core_count();
 					let (new_prices, new_sale) =
-						rotate_sale::<T>(&sale, &config, &status, block_number);
+						rotate_sale::<T>(&sale, &config, &status, reserved_cores, block_number);
 					let start_price = sell_price::<T>(block_number, &new_sale);
 					actions.push(TickAction::SaleRotated {
 						old_sale: sale,
@@ -349,6 +360,16 @@ impl<T: Config>
 		Status::<T>::put(status);
 
 		actions
+	}
+}
+
+// TODO: Move to ohter mod.
+pub struct CoreCountProviderImpl<T: Config>(PhantomData<T>);
+
+impl<T: Config> CoreCountProvider<T> for CoreCountProviderImpl<T> {
+	fn reserved_core_count() -> CoreIndex {
+		Reservations::<T>::decode_len().unwrap_or_default() as u16 +
+			Leases::<T>::decode_len().unwrap_or_default() as u16
 	}
 }
 
@@ -423,15 +444,12 @@ fn rotate_sale<T: Config>(
 	old_sale: &SaleInfoRecordOf<T>,
 	config: &ConfigRecordOf<T>,
 	status: &StatusRecord,
+	reserved_cores: CoreIndex,
 	now: RelayBlockNumberOf<T>,
 ) -> (AdaptedPrices<BalanceOf<T>>, SaleInfoRecordOf<T>) {
 	let new_prices = adapt_prices::<T>(&old_sale);
 
-	// TODO: Move this logic somewhere else.
-	let first_core = Reservations::<T>::decode_len().unwrap_or_default() as u16 +
-		Leases::<T>::decode_len().unwrap_or_default() as u16;
-
-	let max_possible_sales = status.core_count.saturating_sub(first_core);
+	let max_possible_sales = status.core_count.saturating_sub(reserved_cores);
 	let limit_cores_offered = config.limit_cores_offered.unwrap_or(CoreIndex::max_value());
 	let cores_offered = limit_cores_offered.min(max_possible_sales);
 	let sale_start = now.saturating_add(config.interlude_length);
@@ -454,7 +472,7 @@ fn rotate_sale<T: Config>(
 		sellout_price,
 		region_begin,
 		region_end,
-		first_core,
+		first_core: reserved_cores,
 		ideal_cores_sold,
 		cores_offered,
 		cores_sold: 0,

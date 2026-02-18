@@ -37,6 +37,7 @@ pub type BidIdOf<T> = <Pallet<T> as Market<
 	AccountIdFor<T>,
 	SaleInfoRecordOf<T>,
 	AdaptedPrices<BalanceOf<T>>,
+	T,
 >>::BidId;
 
 /// Relay-chain block number with a fixed divisor of Config::TimeslicePeriod.
