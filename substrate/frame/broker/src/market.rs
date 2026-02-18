@@ -24,9 +24,9 @@ use sp_runtime::{traits::Zero, DispatchError, FixedU64, SaturatedConversion, Sat
 use std::marker::PhantomData;
 
 use crate::{
-	AdaptPrice, AdaptedPrices, BalanceOf, Config, ConfigRecordOf, Configuration, CoreIndex, Leases,
-	Pallet, PotentialRenewalId, RelayBlockNumberOf, Reservations, SaleInfo, SaleInfoRecord,
-	SaleInfoRecordOf, SalePerformance, Status, StatusRecord, Timeslice,
+	AdaptPrice, AdaptedPrices, BalanceOf, BidIdOf, Config, ConfigRecordOf, Configuration,
+	CoreIndex, Leases, Pallet, PotentialRenewalId, RelayBlockNumberOf, Reservations, SaleInfo,
+	SaleInfoRecord, SaleInfoRecordOf, SalePerformance, Status, StatusRecord, Timeslice,
 };
 
 // TODO: Extend the documentation.
@@ -37,7 +37,7 @@ use crate::{
 /// - Every order will either create a bid or will be resolved immediately.
 /// - There're two types of orders: bulk coretime purchase and bulk coretime renewal.
 /// - Coretime regions are fungible.
-pub trait Market<Balance, RelayBlockNumber, AccountId, SaleInfoRecord, AdaptedPrices, T: Config> {
+pub trait Market<T: Config> {
 	type Error: Into<DispatchError>;
 	/// Unique ID assigned to every bid.
 	type BidId;
@@ -45,10 +45,10 @@ pub trait Market<Balance, RelayBlockNumber, AccountId, SaleInfoRecord, AdaptedPr
 
 	// TODO: Unify the interface.
 	fn start_sales(
-		block_number: RelayBlockNumber,
-		end_price: Balance,
-		core_count: u16,
-	) -> Result<Vec<StartSalesEvent<SaleInfoRecord, AdaptedPrices, Balance>>, Self::Error>;
+		block_number: RelayBlockNumberOf<T>,
+		end_price: BalanceOf<T>,
+		core_count: CoreIndex,
+	) -> Result<Vec<StartSalesEvent<T>>, Self::Error>;
 
 	/// Place an order for one bulk coretime region purchase.
 	///
@@ -57,10 +57,10 @@ pub trait Market<Balance, RelayBlockNumber, AccountId, SaleInfoRecord, AdaptedPr
 	/// - `since_timeslice_start` - amount of blocks passed since the current timeslice start
 	/// - `price_limit` - maximum price which the buyer is willing to pay
 	fn place_order(
-		block_number: RelayBlockNumber,
-		who: &AccountId,
-		price_limit: Balance,
-	) -> Result<OrderResult<Balance, Self::BidId>, Self::Error>;
+		block_number: RelayBlockNumberOf<T>,
+		who: &T::AccountId,
+		price_limit: BalanceOf<T>,
+	) -> Result<OrderResult<T, Self::BidId>, Self::Error>;
 
 	/// Place an order for bulk coretime renewal.
 	///
@@ -68,11 +68,11 @@ pub trait Market<Balance, RelayBlockNumber, AccountId, SaleInfoRecord, AdaptedPr
 	///
 	/// - `since_timeslice_start` - amount of blocks passed since the current timeslice start
 	fn place_renewal_order(
-		block_number: RelayBlockNumber,
-		who: &AccountId,
+		block_number: RelayBlockNumberOf<T>,
+		who: &T::AccountId,
 		renewal: PotentialRenewalId,
-		recorded_price: Balance,
-	) -> Result<RenewalOrderResult<Balance, Self::BidId>, Self::Error>;
+		recorded_price: BalanceOf<T>,
+	) -> Result<RenewalOrderResult<T, Self::BidId>, Self::Error>;
 
 	/// Close the bid given its `BidId`.
 	///
@@ -80,32 +80,30 @@ pub trait Market<Balance, RelayBlockNumber, AccountId, SaleInfoRecord, AdaptedPr
 	/// forcefully if `maybe_check_owner` is `None` or checking the bid owner if it's `Some`).
 	fn close_bid(
 		id: Self::BidId,
-		maybe_check_owner: Option<AccountId>,
-	) -> Result<CloseBidResult<AccountId, Balance>, Self::Error>;
+		maybe_check_owner: Option<T::AccountId>,
+	) -> Result<CloseBidResult<T>, Self::Error>;
 
 	/// Logic that gets called in `on_initialize` hook.
-	fn tick(
-		now: RelayBlockNumber,
-	) -> Vec<TickAction<AccountId, Balance, Self::BidId, SaleInfoRecord, AdaptedPrices>>;
+	fn tick(now: RelayBlockNumberOf<T>) -> Vec<TickAction<T, Self::BidId>>;
 }
 
 pub trait CoreCountProvider<T: Config> {
 	fn reserved_core_count() -> CoreIndex;
 }
 
-pub enum OrderResult<Balance, BidId> {
-	BidPlaced { id: BidId, bid_price: Balance },
-	Sold { price: Balance, region_begin: Timeslice, region_end: Timeslice, core: CoreIndex },
+pub enum OrderResult<T: Config, BidId> {
+	BidPlaced { id: BidId, bid_price: BalanceOf<T> },
+	Sold { price: BalanceOf<T>, region_begin: Timeslice, region_end: Timeslice, core: CoreIndex },
 }
 
-pub enum RenewalOrderResult<Balance, BidId> {
+pub enum RenewalOrderResult<T: Config, BidId> {
 	BidPlaced {
 		id: BidId,
-		bid_price: Balance,
+		bid_price: BalanceOf<T>,
 	},
 	Sold {
-		price: Balance,
-		next_renewal_price: Balance,
+		price: BalanceOf<T>,
+		next_renewal_price: BalanceOf<T>,
 		/// Timeslice where the newly renewed coretime will be active.
 		effective_from: Timeslice,
 		effective_to: Timeslice,
@@ -113,52 +111,52 @@ pub enum RenewalOrderResult<Balance, BidId> {
 	},
 }
 
-pub struct CloseBidResult<AccountId, Balance> {
-	pub owner: AccountId,
-	pub refund: Balance,
+pub struct CloseBidResult<T: Config> {
+	pub owner: T::AccountId,
+	pub refund: BalanceOf<T>,
 }
-pub enum TickAction<AccountId, Balance, BidId, SaleInfoRecord, AdaptedPrices> {
+pub enum TickAction<T: Config, BidId> {
 	SellRegion {
-		owner: AccountId,
+		owner: T::AccountId,
 		/// How much was paid for this region in total.
-		paid: Balance,
+		paid: BalanceOf<T>,
 		/// How much needs to be refunded to the user.
-		refund: Balance,
+		refund: BalanceOf<T>,
 		region_begin: Timeslice,
 		region_end: Timeslice,
 		core: CoreIndex,
 	},
 	RenewRegion {
-		owner: AccountId,
+		owner: T::AccountId,
 		renewal_id: PotentialRenewalId,
-		refund: Balance,
+		refund: BalanceOf<T>,
 	},
 	BidClosed {
 		id: BidId,
-		refund: Balance,
-		owner: AccountId,
+		refund: BalanceOf<T>,
+		owner: T::AccountId,
 	},
 	SaleRotated {
-		old_sale: SaleInfoRecord,
-		new_sale: SaleInfoRecord,
-		new_prices: AdaptedPrices,
+		old_sale: SaleInfoRecordOf<T>,
+		new_sale: SaleInfoRecordOf<T>,
+		new_prices: AdaptedPrices<BalanceOf<T>>,
 		// TODO: Deprecate it as it doesn't fit into the general market impl but used when emitting
 		// an event.
-		start_price: Balance,
+		start_price: BalanceOf<T>,
 	},
 	TimesliceCommited {
 		timeslice: Timeslice,
 	},
 }
 
-pub enum StartSalesEvent<SaleInfoRecord, AdaptedPrices, Balance> {
+pub enum StartSalesEvent<T: Config> {
 	SalesStarted {
-		imaginary_old_sale: SaleInfoRecord,
-		new_sale: SaleInfoRecord,
-		new_prices: AdaptedPrices,
+		imaginary_old_sale: SaleInfoRecordOf<T>,
+		new_sale: SaleInfoRecordOf<T>,
+		new_prices: AdaptedPrices<BalanceOf<T>>,
 		// TODO: Deprecate it as it doesn't fit into the general market impl but used when emitting
 		// an event.
-		start_price: Balance,
+		start_price: BalanceOf<T>,
 	},
 }
 
@@ -179,16 +177,7 @@ impl From<MarketError> for DispatchError {
 	}
 }
 
-impl<T: Config>
-	Market<
-		BalanceOf<T>,
-		RelayBlockNumberOf<T>,
-		AccountIdFor<T>,
-		SaleInfoRecordOf<T>,
-		AdaptedPrices<BalanceOf<T>>,
-		T,
-	> for Pallet<T>
-{
+impl<T: Config> Market<T> for Pallet<T> {
 	type Error = MarketError;
 	/// Must be unique.
 	type BidId = ();
@@ -198,10 +187,7 @@ impl<T: Config>
 		block_number: RelayBlockNumberOf<T>,
 		end_price: BalanceOf<T>,
 		core_count: u16,
-	) -> Result<
-		Vec<StartSalesEvent<SaleInfoRecordOf<T>, AdaptedPrices<BalanceOf<T>>, BalanceOf<T>>>,
-		Self::Error,
-	> {
+	) -> Result<Vec<StartSalesEvent<T>>, Self::Error> {
 		let config = Configuration::<T>::get().ok_or(MarketError::Uninitialized)?;
 
 		let commit_timeslice = latest_timeslice_ready_to_commit::<T>(block_number, &config);
@@ -248,7 +234,7 @@ impl<T: Config>
 		block_number: RelayBlockNumberOf<T>,
 		who: &AccountIdFor<T>,
 		price_limit: BalanceOf<T>,
-	) -> Result<OrderResult<BalanceOf<T>, Self::BidId>, Self::Error> {
+	) -> Result<OrderResult<T, Self::BidId>, Self::Error> {
 		let mut sale = SaleInfo::<T>::get().ok_or(MarketError::NoSales)?;
 		// TODO: don't read status here.
 		let status = Status::<T>::get().ok_or(MarketError::Uninitialized)?;
@@ -282,7 +268,7 @@ impl<T: Config>
 		who: &AccountIdFor<T>,
 		renewal: PotentialRenewalId,
 		recorded_price: BalanceOf<T>,
-	) -> Result<RenewalOrderResult<BalanceOf<T>, Self::BidId>, Self::Error> {
+	) -> Result<RenewalOrderResult<T, Self::BidId>, Self::Error> {
 		// TODO: Store `config.renewal_bump` in the market config.
 		let config = Configuration::<T>::get().ok_or(MarketError::Uninitialized)?;
 		// TODO: don't read status here.
@@ -313,21 +299,11 @@ impl<T: Config>
 	fn close_bid(
 		id: Self::BidId,
 		maybe_check_owner: Option<AccountIdFor<T>>,
-	) -> Result<CloseBidResult<AccountIdFor<T>, BalanceOf<T>>, Self::Error> {
+	) -> Result<CloseBidResult<T>, Self::Error> {
 		Err(MarketError::BidNotExist)
 	}
 
-	fn tick(
-		block_number: RelayBlockNumberOf<T>,
-	) -> Vec<
-		TickAction<
-			AccountIdFor<T>,
-			BalanceOf<T>,
-			Self::BidId,
-			SaleInfoRecordOf<T>,
-			AdaptedPrices<BalanceOf<T>>,
-		>,
-	> {
+	fn tick(block_number: RelayBlockNumberOf<T>) -> Vec<TickAction<T, Self::BidId>> {
 		// TODO: Store `config.renewal_bump` in the market config.
 		let config = Configuration::<T>::get().unwrap();
 		// TODO: don't read status here.
