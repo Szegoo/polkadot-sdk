@@ -24,9 +24,10 @@ use sp_runtime::{traits::Zero, DispatchError, FixedU64, SaturatedConversion, Sat
 use std::marker::PhantomData;
 
 use crate::{
-	AdaptPrice, AdaptedPrices, BalanceOf, BidIdOf, Config, ConfigRecordOf, Configuration,
-	CoreIndex, Leases, Pallet, PotentialRenewalId, RelayBlockNumberOf, Reservations, SaleInfo,
-	SaleInfoRecord, SaleInfoRecordOf, SalePerformance, Status, StatusRecord, Timeslice,
+	utility_impls::CoreCountProviderImpl, AdaptPrice, AdaptedPrices, BalanceOf, BidIdOf, Config,
+	ConfigRecordOf, Configuration, CoreIndex, Leases, Pallet, PotentialRenewalId,
+	RelayBlockNumberOf, Reservations, SaleInfo, SaleInfoRecord, SaleInfoRecordOf, SalePerformance,
+	Status, StatusRecord, Timeslice,
 };
 
 // TODO: Extend the documentation.
@@ -336,16 +337,6 @@ impl<T: Config> Market<T> for Pallet<T> {
 		Status::<T>::put(status);
 
 		actions
-	}
-}
-
-// TODO: Move to ohter mod.
-pub struct CoreCountProviderImpl<T: Config>(PhantomData<T>);
-
-impl<T: Config> CoreCountProvider<T> for CoreCountProviderImpl<T> {
-	fn reserved_core_count() -> CoreIndex {
-		Reservations::<T>::decode_len().unwrap_or_default() as u16 +
-			Leases::<T>::decode_len().unwrap_or_default() as u16
 	}
 }
 

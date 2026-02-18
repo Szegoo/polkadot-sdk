@@ -157,3 +157,12 @@ impl<T: Config> Pallet<T> {
 		};
 	}
 }
+
+pub struct CoreCountProviderImpl<T: Config>(PhantomData<T>);
+
+impl<T: Config> CoreCountProvider<T> for CoreCountProviderImpl<T> {
+	fn reserved_core_count() -> CoreIndex {
+		Reservations::<T>::decode_len().unwrap_or_default() as u16 +
+			Leases::<T>::decode_len().unwrap_or_default() as u16
+	}
+}
