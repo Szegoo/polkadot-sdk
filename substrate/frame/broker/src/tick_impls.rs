@@ -38,9 +38,8 @@ impl<T: Config> Pallet<T> {
 		let mut meter = WeightMeter::new();
 		meter.consume(T::WeightInfo::do_tick_base());
 
-		let (mut status, config) = match (Status::<T>::get(), Configuration::<T>::get()) {
-			(Some(s), Some(c)) => (s, c),
-			_ => return meter.consumed(),
+		let Some(mut status) = Status::<T>::get() else {
+			return meter.consumed();
 		};
 
 		if Self::process_core_count(&mut status) {
