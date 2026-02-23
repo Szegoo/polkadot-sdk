@@ -36,6 +36,7 @@ impl<T: Config> Pallet<T> {
 	/// - Initialize an instantaneous core pool historical revenue record
 	pub(crate) fn do_tick() -> Weight {
 		let mut meter = WeightMeter::new();
+		// TODO: This weight may need adjustment.
 		meter.consume(T::WeightInfo::do_tick_base());
 
 		let Some(mut status) = Status::<T>::get() else {
@@ -133,9 +134,69 @@ impl<T: Config> Pallet<T> {
 		true
 	}
 
+	fn process_market_logic() {
+		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
+		let result = <Self as Market<T>>::tick(now);
+
+		for action in result {
+			match action {
+				TickAction::BidClosed { id, refund, owner } => {
+					// TODO: Process error.
+					Self::refund(&owner, refund);
+
+					Self::deposit_event(Event::BidClosed { bid_id: id, refund, owner });
+				},
+				TickAction::RenewRegion { owner, renewal_id, refund } => {
+					// TODO: Process error.
+					Self::refund(&owner, refund);
+					// TODO: Process error.
+					Self::do_renew(owner, renewal_id.core);
+				},
+				TickAction::SellRegion { owner, paid, refund, region_begin, region_end, core } => {
+					// TODO: Process error.
+					Self::refund(&owner, refund);
+
+					let id = Self::issue(
+						core,
+						region_begin,
+						CoreMask::complete(),
+						region_end,
+						Some(owner.clone()),
+						Some(paid),
+					);
+					let duration = region_end.saturating_sub(region_begin);
+					Self::deposit_event(Event::Purchased {
+						who: owner,
+						region_id: id,
+						price: paid,
+						duration,
+					});
+				},
+				TickAction::SaleRotated { old_sale, new_sale, new_prices, start_price } => {
+					// TODO: Figure out how to properly read status here.
+					let status = Status::<T>::get().unwrap();
+
+					Self::rotate_sale(&old_sale, &new_sale, new_prices, start_price, &status);
+				},
+				TickAction::TimesliceCommited { timeslice } => {
+					// TODO: Figure out how to properly read and write status here.
+					let mut status = Status::<T>::get().unwrap();
+
+					Self::process_pool(timeslice, &mut status);
+
+					let timeslice_period = T::TimeslicePeriod::get();
+					let rc_begin = RelayBlockNumberOf::<T>::from(timeslice) * timeslice_period;
+					for core in 0..status.core_count {
+						Self::process_core_schedule(timeslice, rc_begin, core);
+					}
+
+					Status::<T>::put(status);
+				},
+			}
+		}
+	}
+
 	/// Begin selling for the next sale period.
-	///
-	/// Triggered by Relay-chain block number/timeslice.
 	pub(crate) fn rotate_sale(
 		old_sale: &SaleInfoRecordOf<T>,
 		new_sale: &SaleInfoRecordOf<T>,
@@ -234,64 +295,6 @@ impl<T: Config> Pallet<T> {
 		});
 	}
 
-	pub(crate) fn process_pool(when: Timeslice, status: &mut StatusRecord) {
-		let pool_io = InstaPoolIo::<T>::take(when);
-		status.private_pool_size = (status.private_pool_size as SignedCoreMaskBitCount)
-			.saturating_add(pool_io.private) as CoreMaskBitCount;
-		status.system_pool_size = (status.system_pool_size as SignedCoreMaskBitCount)
-			.saturating_add(pool_io.system) as CoreMaskBitCount;
-		let record = InstaPoolHistoryRecord {
-			private_contributions: status.private_pool_size,
-			system_contributions: status.system_pool_size,
-			maybe_payout: None,
-		};
-		InstaPoolHistory::<T>::insert(when, record);
-		Self::deposit_event(Event::<T>::HistoryInitialized {
-			when,
-			private_pool_size: status.private_pool_size,
-			system_pool_size: status.system_pool_size,
-		});
-	}
-
-	/// Schedule cores for the given `timeslice`.
-	pub(crate) fn process_core_schedule(
-		timeslice: Timeslice,
-		rc_begin: RelayBlockNumberOf<T>,
-		core: CoreIndex,
-	) {
-		let Some(workplan) = Workplan::<T>::take((timeslice, core)) else { return };
-		let workload = Workload::<T>::get(core);
-		let parts_used = workplan.iter().map(|i| i.mask).fold(CoreMask::void(), |a, i| a | i);
-		let mut workplan = workplan.into_inner();
-		workplan.extend(workload.into_iter().filter(|i| (i.mask & parts_used).is_void()));
-		let workplan = Schedule::truncate_from(workplan);
-		Workload::<T>::insert(core, &workplan);
-
-		let mut total_used = 0;
-		let mut intermediate = workplan
-			.into_iter()
-			.map(|i| (i.assignment, i.mask.count_ones() as u16 * (57_600 / 80)))
-			.inspect(|i| total_used.saturating_accrue(i.1))
-			.collect::<Vec<_>>();
-		if total_used < 57_600 {
-			intermediate.push((CoreAssignment::Idle, 57_600 - total_used));
-		}
-		intermediate.sort();
-		let mut assignment: Vec<(CoreAssignment, PartsOf57600)> =
-			Vec::with_capacity(intermediate.len());
-		for i in intermediate.into_iter() {
-			if let Some(ref mut last) = assignment.last_mut() {
-				if last.0 == i.0 {
-					last.1 += i.1;
-					continue
-				}
-			}
-			assignment.push(i);
-		}
-		T::Coretime::assign_core(core, rc_begin, assignment.clone(), None);
-		Self::deposit_event(Event::<T>::CoreAssigned { core, when: rc_begin, assignment });
-	}
-
 	/// Renews all the cores which have auto-renewal enabled.
 	pub(crate) fn renew_cores(sale: &SaleInfoRecordOf<T>) {
 		let renewals = AutoRenewals::<T>::get();
@@ -352,65 +355,61 @@ impl<T: Config> Pallet<T> {
 		AutoRenewals::<T>::set(auto_renewals);
 	}
 
-	fn process_market_logic() {
-		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
-		let result = <Self as Market<T>>::tick(now);
+	pub(crate) fn process_pool(when: Timeslice, status: &mut StatusRecord) {
+		let pool_io = InstaPoolIo::<T>::take(when);
+		status.private_pool_size = (status.private_pool_size as SignedCoreMaskBitCount)
+			.saturating_add(pool_io.private) as CoreMaskBitCount;
+		status.system_pool_size = (status.system_pool_size as SignedCoreMaskBitCount)
+			.saturating_add(pool_io.system) as CoreMaskBitCount;
+		let record = InstaPoolHistoryRecord {
+			private_contributions: status.private_pool_size,
+			system_contributions: status.system_pool_size,
+			maybe_payout: None,
+		};
+		InstaPoolHistory::<T>::insert(when, record);
+		Self::deposit_event(Event::<T>::HistoryInitialized {
+			when,
+			private_pool_size: status.private_pool_size,
+			system_pool_size: status.system_pool_size,
+		});
+	}
 
-		for action in result {
-			match action {
-				TickAction::BidClosed { id, refund, owner } => {
-					// TODO: Process error.
-					Self::refund(&owner, refund);
+	/// Schedule cores for the given `timeslice`.
+	pub(crate) fn process_core_schedule(
+		timeslice: Timeslice,
+		rc_begin: RelayBlockNumberOf<T>,
+		core: CoreIndex,
+	) {
+		let Some(workplan) = Workplan::<T>::take((timeslice, core)) else { return };
+		let workload = Workload::<T>::get(core);
+		let parts_used = workplan.iter().map(|i| i.mask).fold(CoreMask::void(), |a, i| a | i);
+		let mut workplan = workplan.into_inner();
+		workplan.extend(workload.into_iter().filter(|i| (i.mask & parts_used).is_void()));
+		let workplan = Schedule::truncate_from(workplan);
+		Workload::<T>::insert(core, &workplan);
 
-					Self::deposit_event(Event::BidClosed { bid_id: id, refund, owner });
-				},
-				TickAction::RenewRegion { owner, renewal_id, refund } => {
-					// TODO: Process error.
-					Self::refund(&owner, refund);
-					// TODO: Process error.
-					Self::do_renew(owner, renewal_id.core);
-				},
-				TickAction::SellRegion { owner, paid, refund, region_begin, region_end, core } => {
-					// TODO: Process error.
-					Self::refund(&owner, refund);
-
-					let id = Self::issue(
-						core,
-						region_begin,
-						CoreMask::complete(),
-						region_end,
-						Some(owner.clone()),
-						Some(paid),
-					);
-					let duration = region_end.saturating_sub(region_begin);
-					Self::deposit_event(Event::Purchased {
-						who: owner,
-						region_id: id,
-						price: paid,
-						duration,
-					});
-				},
-				TickAction::SaleRotated { old_sale, new_sale, new_prices, start_price } => {
-					// TODO: Figure out how to properly read status here.
-					let status = Status::<T>::get().unwrap();
-
-					Self::rotate_sale(&old_sale, &new_sale, new_prices, start_price, &status);
-				},
-				TickAction::TimesliceCommited { timeslice } => {
-					// TODO: Figure out how to properly read and write status here.
-					let mut status = Status::<T>::get().unwrap();
-
-					Self::process_pool(timeslice, &mut status);
-
-					let timeslice_period = T::TimeslicePeriod::get();
-					let rc_begin = RelayBlockNumberOf::<T>::from(timeslice) * timeslice_period;
-					for core in 0..status.core_count {
-						Self::process_core_schedule(timeslice, rc_begin, core);
-					}
-
-					Status::<T>::put(status);
-				},
-			}
+		let mut total_used = 0;
+		let mut intermediate = workplan
+			.into_iter()
+			.map(|i| (i.assignment, i.mask.count_ones() as u16 * (57_600 / 80)))
+			.inspect(|i| total_used.saturating_accrue(i.1))
+			.collect::<Vec<_>>();
+		if total_used < 57_600 {
+			intermediate.push((CoreAssignment::Idle, 57_600 - total_used));
 		}
+		intermediate.sort();
+		let mut assignment: Vec<(CoreAssignment, PartsOf57600)> =
+			Vec::with_capacity(intermediate.len());
+		for i in intermediate.into_iter() {
+			if let Some(ref mut last) = assignment.last_mut() {
+				if last.0 == i.0 {
+					last.1 += i.1;
+					continue
+				}
+			}
+			assignment.push(i);
+		}
+		T::Coretime::assign_core(core, rc_begin, assignment.clone(), None);
+		Self::deposit_event(Event::<T>::CoreAssigned { core, when: rc_begin, assignment });
 	}
 }
