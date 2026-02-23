@@ -15,17 +15,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use core::time;
-
 use crate::dispatchable_impls::DoRenewResult;
 
 use super::*;
 use alloc::{vec, vec::Vec};
-use frame_support::{
-	pallet_prelude::*,
-	traits::{defensive_prelude::*, tokens::Balance},
-	weights::WeightMeter,
-};
+use frame_support::{pallet_prelude::*, traits::defensive_prelude::*, weights::WeightMeter};
 use sp_arithmetic::traits::{One, SaturatedConversion, Saturating, Zero};
 use sp_runtime::traits::{BlockNumberProvider, ConvertBack, MaybeConvert};
 use CompletionStatus::Complete;
@@ -70,7 +64,7 @@ impl<T: Config> Pallet<T> {
 		Status::<T>::put(&status);
 
 		// TODO: Consume weight.
-		Self::process_market_logic(&mut meter);
+		Self::process_market_logic();
 
 		meter.consumed()
 	}
@@ -140,93 +134,67 @@ impl<T: Config> Pallet<T> {
 		true
 	}
 
-	fn process_market_logic(meter: &mut WeightMeter) {
-		// TODO: Charge process_market_logic_base.
-
+	fn process_market_logic() {
 		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
-		let result = <Self as Market<T>>::tick(now, meter);
+		let result = <Self as Market<T>>::tick(now);
 
 		for action in result {
 			match action {
 				TickAction::BidClosed { id, owner } => {
-					Self::process_tick_action_bid_closed(id, owner);
+					Self::deposit_event(Event::BidClosed { bid_id: id, owner });
 				},
 				TickAction::RenewRegion { owner, renewal_id } => {
-					Self::process_tick_action_renew_region(owner, renewal_id);
+					if let Err(e) = Self::do_renew(owner, renewal_id.core) {
+						log::error!(
+							"Failed to renew region with renewal id {:?}: {:?}",
+							renewal_id,
+							e
+						);
+					}
 				},
 				TickAction::SellRegion { owner, paid, region_begin, region_end, core } => {
-					Self::process_tick_action_sell_region(
-						owner,
-						paid,
-						region_begin,
-						region_end,
+					let id = Self::issue(
 						core,
+						region_begin,
+						CoreMask::complete(),
+						region_end,
+						Some(owner.clone()),
+						Some(paid),
 					);
+					let duration = region_end.saturating_sub(region_begin);
+					Self::deposit_event(Event::Purchased {
+						who: owner,
+						region_id: id,
+						price: paid,
+						duration,
+					});
 				},
-				TickAction::Refund { amount, who } => {
-					Self::process_tick_action_refund(who, amount);
-				},
+				TickAction::Refund { amount, who } =>
+					if let Err(e) = Self::refund(&who, amount) {
+						log::error!("Failed to refund {:?} to the user {}: {:?}", amount, who, e)
+					},
 				TickAction::SaleRotated { old_sale, new_sale, new_prices, start_price } => {
-					Self::rotate_sale(&old_sale, &new_sale, new_prices, start_price);
+					// TODO: Figure out how to properly read status here.
+					let status = Status::<T>::get().unwrap();
+
+					Self::rotate_sale(&old_sale, &new_sale, new_prices, start_price, &status);
 				},
 				TickAction::TimesliceCommited { timeslice } => {
-					Self::process_tick_action_timeslice_commited(timeslice);
+					// TODO: Figure out how to properly read and write status here.
+					let mut status = Status::<T>::get().unwrap();
+
+					Self::process_pool(timeslice, &mut status);
+
+					let timeslice_period = T::TimeslicePeriod::get();
+					let rc_begin = RelayBlockNumberOf::<T>::from(timeslice) * timeslice_period;
+					for core in 0..status.core_count {
+						Self::process_core_schedule(timeslice, rc_begin, core);
+					}
+
+					Status::<T>::put(status);
 				},
 			}
 		}
-	}
-
-	pub(crate) fn process_tick_action_bid_closed(id: BidIdOf<T>, owner: T::AccountId) {
-		Self::deposit_event(Event::BidClosed { bid_id: id, owner });
-	}
-
-	pub(crate) fn process_tick_action_renew_region(
-		owner: T::AccountId,
-		renewal_id: PotentialRenewalId,
-	) {
-		if let Err(e) = Self::do_renew(owner, renewal_id.core) {
-			log::error!("Failed to renew region with renewal id {:?}: {:?}", renewal_id, e);
-		}
-	}
-
-	pub(crate) fn process_tick_action_sell_region(
-		owner: T::AccountId,
-		paid: BalanceOf<T>,
-		region_begin: Timeslice,
-		region_end: Timeslice,
-		core: CoreIndex,
-	) {
-		let id = Self::issue(
-			core,
-			region_begin,
-			CoreMask::complete(),
-			region_end,
-			Some(owner.clone()),
-			Some(paid),
-		);
-		let duration = region_end.saturating_sub(region_begin);
-		Self::deposit_event(Event::Purchased { who: owner, region_id: id, price: paid, duration });
-	}
-
-	pub(crate) fn process_tick_action_refund(who: T::AccountId, amount: BalanceOf<T>) {
-		if let Err(e) = Self::refund(&who, amount) {
-			log::error!("Failed to refund {:?} to the user {}: {:?}", amount, who, e)
-		}
-	}
-
-	pub(crate) fn process_tick_action_timeslice_commited(timeslice: Timeslice) {
-		// TODO: Figure out how to properly read and write status here.
-		let mut status = Status::<T>::get().unwrap();
-
-		Self::process_pool(timeslice, &mut status);
-
-		let timeslice_period = T::TimeslicePeriod::get();
-		let rc_begin = RelayBlockNumberOf::<T>::from(timeslice) * timeslice_period;
-		for core in 0..status.core_count {
-			Self::process_core_schedule(timeslice, rc_begin, core);
-		}
-
-		Status::<T>::put(status);
 	}
 
 	/// Begin selling for the next sale period.
@@ -235,10 +203,8 @@ impl<T: Config> Pallet<T> {
 		new_sale: &SaleInfoRecordOf<T>,
 		new_prices: AdaptedPrices<BalanceOf<T>>,
 		start_price: BalanceOf<T>,
+		status: &StatusRecord,
 	) {
-		// TODO: Figure out how to properly read status here.
-		let status = Status::<T>::get().unwrap();
-
 		let pool_item =
 			ScheduleItem { assignment: CoreAssignment::Pool, mask: CoreMask::complete() };
 		let just_pool = Schedule::truncate_from(vec![pool_item]);
