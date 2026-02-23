@@ -16,7 +16,7 @@
 // limitations under the License.
 
 use core::cmp;
-use frame_support::ensure;
+use frame_support::{ensure, weights::WeightMeter};
 use frame_system::pallet_prelude::AccountIdFor;
 use sp_arithmetic::FixedPointNumber;
 use sp_core::Get;
@@ -85,7 +85,10 @@ pub trait Market<T: Config> {
 	) -> Result<CloseBidResult<T>, Self::Error>;
 
 	/// Logic that gets called in `on_initialize` hook.
-	fn tick(now: RelayBlockNumberOf<T>) -> Vec<TickAction<T, Self::BidId>>;
+	fn tick(
+		now: RelayBlockNumberOf<T>,
+		weight_meter: &mut WeightMeter,
+	) -> Vec<TickAction<T, Self::BidId>>;
 }
 
 pub trait CoreCountProvider<T: Config> {
@@ -311,7 +314,11 @@ impl<T: Config> Market<T> for Pallet<T> {
 		Err(MarketError::BidNotExist)
 	}
 
-	fn tick(block_number: RelayBlockNumberOf<T>) -> Vec<TickAction<T, Self::BidId>> {
+	// TODO: Measure weight.
+	fn tick(
+		block_number: RelayBlockNumberOf<T>,
+		weight_meter: &mut WeightMeter,
+	) -> Vec<TickAction<T, Self::BidId>> {
 		// TODO: Store `config.renewal_bump` in the market config.
 		let config = Configuration::<T>::get().unwrap();
 		// TODO: don't read status here.
