@@ -51,6 +51,7 @@ impl<T: Config> Pallet<T> {
 			meter.consume(T::WeightInfo::process_revenue());
 		}
 
+		// TODO: Move this logic to the TickAction processor?
 		let current_timeslice = Self::current_timeslice();
 		if status.last_timeslice < current_timeslice {
 			status.last_timeslice.saturating_inc();
