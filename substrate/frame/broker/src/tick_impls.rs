@@ -140,22 +140,19 @@ impl<T: Config> Pallet<T> {
 
 		for action in result {
 			match action {
-				TickAction::BidClosed { id, refund, owner } => {
-					// TODO: Process error.
-					Self::refund(&owner, refund);
-
-					Self::deposit_event(Event::BidClosed { bid_id: id, refund, owner });
+				TickAction::BidClosed { id, owner } => {
+					Self::deposit_event(Event::BidClosed { bid_id: id, owner });
 				},
-				TickAction::RenewRegion { owner, renewal_id, refund } => {
-					// TODO: Process error.
-					Self::refund(&owner, refund);
-					// TODO: Process error.
-					Self::do_renew(owner, renewal_id.core);
+				TickAction::RenewRegion { owner, renewal_id } => {
+					if let Err(e) = Self::do_renew(owner, renewal_id.core) {
+						log::error!(
+							"Failed to renew region with renewal id {:?}: {:?}",
+							renewal_id,
+							e
+						);
+					}
 				},
-				TickAction::SellRegion { owner, paid, refund, region_begin, region_end, core } => {
-					// TODO: Process error.
-					Self::refund(&owner, refund);
-
+				TickAction::SellRegion { owner, paid, region_begin, region_end, core } => {
 					let id = Self::issue(
 						core,
 						region_begin,
@@ -172,6 +169,10 @@ impl<T: Config> Pallet<T> {
 						duration,
 					});
 				},
+				TickAction::Refund { amount, who } =>
+					if let Err(e) = Self::refund(&who, amount) {
+						log::error!("Failed to refund {:?} to the user {}: {:?}", amount, who, e)
+					},
 				TickAction::SaleRotated { old_sale, new_sale, new_prices, start_price } => {
 					// TODO: Figure out how to properly read status here.
 					let status = Status::<T>::get().unwrap();

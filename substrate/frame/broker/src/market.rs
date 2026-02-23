@@ -121,8 +121,6 @@ pub enum TickAction<T: Config, BidId> {
 		owner: T::AccountId,
 		/// How much was paid for this region in total.
 		paid: BalanceOf<T>,
-		/// How much needs to be refunded to the user.
-		refund: BalanceOf<T>,
 		region_begin: Timeslice,
 		region_end: Timeslice,
 		core: CoreIndex,
@@ -130,11 +128,13 @@ pub enum TickAction<T: Config, BidId> {
 	RenewRegion {
 		owner: T::AccountId,
 		renewal_id: PotentialRenewalId,
-		refund: BalanceOf<T>,
+	},
+	Refund {
+		amount: BalanceOf<T>,
+		who: T::AccountId,
 	},
 	BidClosed {
 		id: BidId,
-		refund: BalanceOf<T>,
 		owner: T::AccountId,
 	},
 	SaleRotated {

@@ -661,11 +661,7 @@ impl<T: Config> Pallet<T> {
 		let result = Pallet::<T>::close_bid(id, maybe_check_owner)?;
 		Self::refund(&result.owner, result.refund)?;
 
-		Self::deposit_event(Event::BidClosed {
-			bid_id: id,
-			refund: result.refund,
-			owner: result.owner,
-		});
+		Self::deposit_event(Event::BidClosed { bid_id: id, owner: result.owner });
 
 		Ok(())
 	}

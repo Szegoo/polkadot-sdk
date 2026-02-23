@@ -525,8 +525,6 @@ pub mod pallet {
 		BidClosed {
 			/// Unique ID of the bid that was removed.
 			bid_id: BidIdOf<T>,
-			/// How much was returned to the original bidder.
-			refund: BalanceOf<T>,
 			/// An account that originally made the bid.
 			owner: T::AccountId,
 		},
