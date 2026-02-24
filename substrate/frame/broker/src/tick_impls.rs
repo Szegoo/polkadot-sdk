@@ -51,17 +51,6 @@ impl<T: Config> Pallet<T> {
 			meter.consume(T::WeightInfo::process_revenue());
 		}
 
-		// TODO: Move this logic to the TickAction processor?
-		let current_timeslice = Self::current_timeslice();
-		if status.last_timeslice < current_timeslice {
-			status.last_timeslice.saturating_inc();
-			let rc_block = T::TimeslicePeriod::get() * status.last_timeslice.into();
-			T::Coretime::request_revenue_info_at(rc_block);
-			meter.consume(T::WeightInfo::request_revenue_info_at());
-			T::Coretime::on_new_timeslice(status.last_timeslice);
-			meter.consume(T::WeightInfo::on_new_timeslice());
-		}
-
 		Status::<T>::put(&status);
 
 		Self::process_market_logic(&mut meter);
@@ -208,6 +197,12 @@ impl<T: Config> Pallet<T> {
 				}
 
 				Status::<T>::put(status);
+			},
+			TickAction::LastTimesliceChanged { last_timeslice, rc_block } => {
+				T::Coretime::request_revenue_info_at(rc_block);
+				meter.consume(T::WeightInfo::request_revenue_info_at());
+				T::Coretime::on_new_timeslice(last_timeslice);
+				meter.consume(T::WeightInfo::on_new_timeslice());
 			},
 		}
 	}

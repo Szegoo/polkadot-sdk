@@ -21,11 +21,11 @@ use frame_system::pallet_prelude::AccountIdFor;
 use sp_arithmetic::FixedPointNumber;
 use sp_core::Get;
 use sp_runtime::{traits::Zero, DispatchError, FixedU64, SaturatedConversion, Saturating};
-use std::marker::PhantomData;
+use std::{marker::PhantomData, os::macos::raw::stat};
 
 use crate::{
 	utility_impls::CoreCountProviderImpl, AdaptPrice, AdaptedPrices, BalanceOf, BidIdOf, Config,
-	ConfigRecordOf, Configuration, CoreIndex, Leases, Pallet, PotentialRenewalId,
+	ConfigRecordOf, Configuration, CoreIndex, Leases, Pallet, PotentialRenewalId, RCBlockNumberOf,
 	RelayBlockNumberOf, Reservations, SaleInfo, SaleInfoRecord, SaleInfoRecordOf, SalePerformance,
 	Status, StatusRecord, Timeslice,
 };
@@ -149,6 +149,10 @@ pub enum TickAction<T: Config, BidId> {
 	},
 	TimesliceCommited {
 		timeslice: Timeslice,
+	},
+	LastTimesliceChanged {
+		last_timeslice: Timeslice,
+		rc_block: RelayBlockNumberOf<T>,
 	},
 }
 
@@ -342,6 +346,17 @@ impl<T: Config> Market<T> for Pallet<T> {
 			}
 
 			actions.push(TickAction::TimesliceCommited { timeslice: commit_timeslice });
+		}
+
+		let current_timeslice = current_timeslice::<T>(block_number);
+		if status.last_timeslice < current_timeslice {
+			status.last_timeslice.saturating_inc();
+			let rc_block = T::TimeslicePeriod::get() * status.last_timeslice.into();
+
+			actions.push(TickAction::LastTimesliceChanged {
+				last_timeslice: status.last_timeslice,
+				rc_block,
+			});
 		}
 
 		Status::<T>::put(status);
