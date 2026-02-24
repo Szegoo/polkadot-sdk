@@ -64,8 +64,7 @@ impl<T: Config> Pallet<T> {
 
 		Status::<T>::put(&status);
 
-		// TODO: Consume weight.
-		Self::process_market_logic();
+		Self::process_market_logic(&mut meter);
 
 		meter.consumed()
 	}
@@ -135,68 +134,81 @@ impl<T: Config> Pallet<T> {
 		true
 	}
 
-	fn process_market_logic() {
+	pub(crate) fn process_market_logic(meter: &mut WeightMeter) {
 		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
 		let result = <Self as Market<T>>::tick(now);
 
 		for action in result {
-			match action {
-				TickAction::BidClosed { id, owner } => {
-					Self::deposit_event(Event::BidClosed { bid_id: id, owner });
-				},
-				TickAction::RenewRegion { owner, renewal_id } => {
-					if let Err(e) = Self::do_renew(owner, renewal_id.core) {
-						log::error!(
-							"Failed to renew region with renewal id {:?}: {:?}",
-							renewal_id,
-							e
-						);
-					}
-				},
-				TickAction::SellRegion { owner, paid, region_begin, region_end, core } => {
-					let id = Self::issue(
-						core,
-						region_begin,
-						CoreMask::complete(),
-						region_end,
-						Some(owner.clone()),
-						Some(paid),
-					);
-					let duration = region_end.saturating_sub(region_begin);
-					Self::deposit_event(Event::Purchased {
-						who: owner,
-						region_id: id,
-						price: paid,
-						duration,
-					});
-				},
-				TickAction::Refund { amount, who } =>
-					if let Err(e) = Self::refund(&who, amount) {
-						log::error!("Failed to refund {:?} to the user {}: {:?}", amount, who, e);
+			Self::process_tick_action(action, meter);
+		}
+	}
 
-						Self::deposit_event(Event::<T>::RefundFailed { who, amount });
-					},
-				TickAction::SaleRotated { old_sale, new_sale, new_prices, start_price } => {
-					// TODO: Figure out how to properly read status here.
-					let status = Status::<T>::get().unwrap();
+	pub(crate) fn process_tick_action(action: TickAction<T, BidIdOf<T>>, meter: &mut WeightMeter) {
+		match action {
+			TickAction::BidClosed { id, owner } => {
+				meter.consume(T::WeightInfo::process_tick_action_bid_closed());
 
-					Self::rotate_sale(&old_sale, &new_sale, new_prices, start_price, &status);
-				},
-				TickAction::TimesliceCommited { timeslice } => {
-					// TODO: Figure out how to properly read and write status here.
-					let mut status = Status::<T>::get().unwrap();
+				Self::deposit_event(Event::BidClosed { bid_id: id, owner });
+			},
+			TickAction::RenewRegion { owner, renewal_id } => {
+				meter.consume(T::WeightInfo::process_tick_action_renew_region());
 
-					Self::process_pool(timeslice, &mut status);
+				if let Err(e) = Self::do_renew(owner, renewal_id.core) {
+					log::error!("Failed to renew region with renewal id {:?}: {:?}", renewal_id, e);
+				}
+			},
+			TickAction::SellRegion { owner, paid, region_begin, region_end, core } => {
+				meter.consume(T::WeightInfo::process_tick_action_sell_region());
 
-					let timeslice_period = T::TimeslicePeriod::get();
-					let rc_begin = RelayBlockNumberOf::<T>::from(timeslice) * timeslice_period;
-					for core in 0..status.core_count {
-						Self::process_core_schedule(timeslice, rc_begin, core);
-					}
+				let id = Self::issue(
+					core,
+					region_begin,
+					CoreMask::complete(),
+					region_end,
+					Some(owner.clone()),
+					Some(paid),
+				);
+				let duration = region_end.saturating_sub(region_begin);
+				Self::deposit_event(Event::Purchased {
+					who: owner,
+					region_id: id,
+					price: paid,
+					duration,
+				});
+			},
+			TickAction::Refund { amount, who } => {
+				meter.consume(T::WeightInfo::process_tick_action_refund());
 
-					Status::<T>::put(status);
-				},
-			}
+				if let Err(e) = Self::refund(&who, amount) {
+					log::error!("Failed to refund {:?} to the user {}: {:?}", amount, who, e);
+
+					Self::deposit_event(Event::<T>::RefundFailed { who, amount });
+				}
+			},
+			TickAction::SaleRotated { old_sale, new_sale, new_prices, start_price } => {
+				meter.consume(T::WeightInfo::process_tick_action_sale_rotated());
+
+				// TODO: Figure out how to properly read status here.
+				let status = Status::<T>::get().unwrap();
+
+				Self::rotate_sale(&old_sale, &new_sale, new_prices, start_price, &status);
+			},
+			TickAction::TimesliceCommited { timeslice } => {
+				meter.consume(T::WeightInfo::process_tick_action_timeslice_commited());
+
+				// TODO: Figure out how to properly read and write status here.
+				let mut status = Status::<T>::get().unwrap();
+
+				Self::process_pool(timeslice, &mut status);
+
+				let timeslice_period = T::TimeslicePeriod::get();
+				let rc_begin = RelayBlockNumberOf::<T>::from(timeslice) * timeslice_period;
+				for core in 0..status.core_count {
+					Self::process_core_schedule(timeslice, rc_begin, core);
+				}
+
+				Status::<T>::put(status);
+			},
 		}
 	}
 

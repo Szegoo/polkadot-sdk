@@ -116,6 +116,8 @@ pub struct CloseBidResult<T: Config> {
 	pub owner: T::AccountId,
 	pub refund: BalanceOf<T>,
 }
+
+// TODO: Don't pass BidId as a separate generic.
 pub enum TickAction<T: Config, BidId> {
 	SellRegion {
 		owner: T::AccountId,
@@ -311,6 +313,7 @@ impl<T: Config> Market<T> for Pallet<T> {
 		Err(MarketError::BidNotExist)
 	}
 
+	// TODO: Pass WeightMeter here?
 	fn tick(block_number: RelayBlockNumberOf<T>) -> Vec<TickAction<T, Self::BidId>> {
 		// TODO: Store `config.renewal_bump` in the market config.
 		let config = Configuration::<T>::get().unwrap();

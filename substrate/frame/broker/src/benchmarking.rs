@@ -1343,6 +1343,54 @@ mod benches {
 		Ok(())
 	}
 
+	#[benchmark]
+	fn process_tick_action_bid_closed() {
+		#[block]
+		{}
+
+		todo!()
+	}
+
+	#[benchmark]
+	fn process_tick_action_renew_region() {
+		#[block]
+		{}
+
+		todo!()
+	}
+
+	#[benchmark]
+	fn process_tick_action_sell_region() {
+		#[block]
+		{}
+
+		todo!()
+	}
+
+	#[benchmark]
+	fn process_tick_action_refund() {
+		#[block]
+		{}
+
+		todo!()
+	}
+
+	#[benchmark]
+	fn process_tick_action_sale_rotated() {
+		#[block]
+		{}
+
+		todo!()
+	}
+
+	#[benchmark]
+	fn process_tick_action_timeslice_commited() {
+		#[block]
+		{}
+
+		todo!()
+	}
+
 	// Implements a test for each benchmark. Execute with:
 	// `cargo test -p pallet-broker --features runtime-benchmarks`.
 	impl_benchmark_test_suite!(Pallet, crate::mock::new_test_ext(), crate::mock::Test);
