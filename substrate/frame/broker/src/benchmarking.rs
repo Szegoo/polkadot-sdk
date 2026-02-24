@@ -145,6 +145,9 @@ fn get_start_end_price<T: Config>(initial_price: BalanceOf<T>) -> (BalanceOf<T>,
 
 #[benchmarks]
 mod benches {
+	use frame_benchmarking::baseline::mock::RuntimeEvent;
+	use frame_support::weights::WeightMeter;
+
 	use super::*;
 	use crate::Finality::*;
 
@@ -1345,10 +1348,16 @@ mod benches {
 
 	#[benchmark]
 	fn process_tick_action_bid_closed() {
-		#[block]
-		{}
+		let owner: T::AccountId = whitelisted_caller();
+		let action = TickAction::BidClosed { id: (), owner: owner.clone() };
+		let mut meter = WeightMeter::new();
 
-		todo!()
+		#[block]
+		{
+			Broker::<T>::process_tick_action(action, &mut meter);
+		}
+
+		assert_last_event::<T>(Event::BidClosed { bid_id: (), owner }.into());
 	}
 
 	#[benchmark]
@@ -1361,10 +1370,30 @@ mod benches {
 
 	#[benchmark]
 	fn process_tick_action_sell_region() {
-		#[block]
-		{}
+		let owner: T::AccountId = whitelisted_caller();
+		let action = TickAction::SellRegion {
+			owner: owner.clone(),
+			paid: T::Currency::minimum_balance(),
+			region_begin: 0,
+			region_end: 1,
+			core: 0,
+		};
+		let mut meter = WeightMeter::new();
 
-		todo!()
+		#[block]
+		{
+			Broker::<T>::process_tick_action(action, &mut meter);
+		}
+
+		assert_last_event::<T>(
+			Event::Purchased {
+				who: owner,
+				region_id: RegionId { begin: 0, core: 0, mask: CoreMask::complete() },
+				price: T::Currency::minimum_balance(),
+				duration: 1,
+			}
+			.into(),
+		);
 	}
 
 	#[benchmark]
