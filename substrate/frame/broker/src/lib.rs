@@ -528,6 +528,13 @@ pub mod pallet {
 			/// An account that originally made the bid.
 			owner: T::AccountId,
 		},
+		/// Refund to the user has failed.
+		RefundFailed {
+			/// The account for which the refund was designated.
+			who: T::AccountId,
+			/// Amount that was intended to be returned.
+			amount: BalanceOf<T>,
+		},
 	}
 
 	#[pallet::error]

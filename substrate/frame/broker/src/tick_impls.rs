@@ -172,7 +172,9 @@ impl<T: Config> Pallet<T> {
 				},
 				TickAction::Refund { amount, who } =>
 					if let Err(e) = Self::refund(&who, amount) {
-						log::error!("Failed to refund {:?} to the user {}: {:?}", amount, who, e)
+						log::error!("Failed to refund {:?} to the user {}: {:?}", amount, who, e);
+
+						Self::deposit_event(Event::<T>::RefundFailed { who, amount });
 					},
 				TickAction::SaleRotated { old_sale, new_sale, new_prices, start_price } => {
 					// TODO: Figure out how to properly read status here.
