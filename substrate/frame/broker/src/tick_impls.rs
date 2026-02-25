@@ -36,7 +36,6 @@ impl<T: Config> Pallet<T> {
 	/// - Initialize an instantaneous core pool historical revenue record
 	pub(crate) fn do_tick() -> Weight {
 		let mut meter = WeightMeter::new();
-		// TODO: This weight may need adjustment.
 		meter.consume(T::WeightInfo::do_tick_base());
 
 		let Some(mut status) = Status::<T>::get() else {
