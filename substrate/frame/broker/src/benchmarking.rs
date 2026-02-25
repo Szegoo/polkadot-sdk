@@ -1363,9 +1363,10 @@ mod benches {
 	#[benchmark]
 	fn process_tick_action_renew_region() {
 		#[block]
-		{}
-
-		todo!()
+		{
+			// TODO #10900. This benchmark is useless for the current implementation of the market
+			// logic but will be useful with RFC-17 implementation.
+		}
 	}
 
 	#[benchmark]
@@ -1399,9 +1400,10 @@ mod benches {
 	#[benchmark]
 	fn process_tick_action_refund() {
 		#[block]
-		{}
-
-		todo!()
+		{
+			// TODO #10900. This benchmark is useless for the current implementation of the market
+			// logic but will be useful with RFC-17 implementation.
+		}
 	}
 
 	#[benchmark]
