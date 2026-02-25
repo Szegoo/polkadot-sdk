@@ -124,7 +124,7 @@ impl<T: Config> Pallet<T> {
 
 	pub(crate) fn process_market_logic(meter: &mut WeightMeter) {
 		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
-		let result = <Self as Market<T>>::tick(now);
+		let result = <Self as Market<T>>::tick(now, meter);
 
 		for action in result {
 			Self::process_tick_action(action, meter);
