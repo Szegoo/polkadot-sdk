@@ -142,9 +142,7 @@ impl<T: Config> Pallet<T> {
 			TickAction::RenewRegion { owner, renewal_id } => {
 				meter.consume(T::WeightInfo::process_tick_action_renew_region());
 
-				if let Err(e) = Self::do_renew(owner, renewal_id.core) {
-					log::error!("Failed to renew region with renewal id {:?}: {:?}", renewal_id, e);
-				}
+				Self::do_renew(owner, renewal_id.core).defensive_ok();
 			},
 			TickAction::SellRegion { owner, paid, region_begin, region_end, core } => {
 				meter.consume(T::WeightInfo::process_tick_action_sell_region());
@@ -168,11 +166,7 @@ impl<T: Config> Pallet<T> {
 			TickAction::Refund { amount, who } => {
 				meter.consume(T::WeightInfo::process_tick_action_refund());
 
-				if let Err(e) = Self::refund(&who, amount) {
-					log::error!("Failed to refund {:?} to the user {}: {:?}", amount, who, e);
-
-					Self::deposit_event(Event::<T>::RefundFailed { who, amount });
-				}
+				Self::refund(&who, amount).defensive_ok();
 			},
 			TickAction::SaleRotated { old_sale, new_sale, new_prices, start_price } => {
 				meter.consume(T::WeightInfo::process_tick_action_sale_rotated());
