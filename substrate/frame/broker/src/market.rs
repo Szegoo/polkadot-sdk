@@ -21,7 +21,7 @@ use frame_system::pallet_prelude::AccountIdFor;
 use sp_arithmetic::FixedPointNumber;
 use sp_core::Get;
 use sp_runtime::{traits::Zero, DispatchError, FixedU64, SaturatedConversion, Saturating};
-use std::{marker::PhantomData, os::macos::raw::stat};
+use std::marker::PhantomData;
 
 use crate::{
 	utility_impls::CoreCountProviderImpl, AdaptPrice, AdaptedPrices, BalanceOf, BidIdOf, Config,
