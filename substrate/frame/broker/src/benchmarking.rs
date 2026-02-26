@@ -1310,12 +1310,7 @@ mod benches {
 		let (new_prices, new_sale) =
 			market::rotate_sale::<T>(&sale, &config, &status, reserved_cores, block);
 		let start_price = market::sell_price::<T>(block, &new_sale);
-		let action  = TickAction::SaleRotated {
-			old_sale: sale,
-			new_sale,
-			new_prices,
-			start_price,
-		};
+		let action = TickAction::SaleRotated { old_sale: sale, new_sale, new_prices, start_price };
 
 		let mut meter = WeightMeter::new();
 
@@ -1405,10 +1400,10 @@ mod benches {
 
 		assert!(InstaPoolHistory::<T>::get(timeslice).is_some());
 		assert_has_event::<T>(
-			Event::HistoryInitialized { when: timeslice, private_pool_size, system_pool_size }.into(),
+			Event::HistoryInitialized { when: timeslice, private_pool_size, system_pool_size }
+				.into(),
 		);
 
-		
 		let timeslice_period = T::TimeslicePeriod::get();
 		let rc_begin = RelayBlockNumberOf::<T>::from(timeslice) * timeslice_period;
 
@@ -1418,9 +1413,58 @@ mod benches {
 		}
 
 		for core in 0..status.core_count {
-			assert_eq!(Workload::<T>::get(core).len(), CORE_MASK_BITS);	
-			assert_has_event::<T>(Event::CoreAssigned { core, when: rc_begin, assignment: assignment.clone() }.into());
+			assert_eq!(Workload::<T>::get(core).len(), CORE_MASK_BITS);
+			assert_has_event::<T>(
+				Event::CoreAssigned { core, when: rc_begin, assignment: assignment.clone() }.into(),
+			);
 		}
+	}
+
+	#[benchmark]
+	fn market_sale_rotated() -> Result<(), BenchmarkError> {
+		setup_and_start_sale::<T>()?;
+
+		let config = new_config_record::<T>();
+		let sale = SaleInfo::<T>::get().expect("Sale should be present at this point");
+		let status = StatusRecord {
+			core_count: 0,
+			private_pool_size: 0,
+			system_pool_size: 0,
+			last_committed_timeslice: 0,
+			last_timeslice: 0,
+		};
+		let block_number = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
+		let mut actions = vec![];
+
+		#[block]
+		{
+			market::sale_rotated::<T, Broker<T>>(sale, &config, &status, block_number, &mut actions);
+		}
+
+		assert_eq!(actions.len(), 1);
+		assert!(matches!(actions[0], TickAction::SaleRotated { .. }));
+
+		Ok(())
+	}
+
+	#[benchmark]
+	fn market_last_timeslice_changed() {
+		let mut status = StatusRecord {
+			core_count: 0,
+			private_pool_size: 0,
+			system_pool_size: 0,
+			last_committed_timeslice: 0,
+			last_timeslice: 0,
+		};
+		let mut actions = vec![];
+
+		#[block]
+		{
+			market::last_timeslice_changed::<T>(&mut status, &mut actions);
+		}
+
+		assert_eq!(actions.len(), 1);
+		assert!(matches!(actions[0], TickAction::LastTimesliceChanged { .. }));		
 	}
 
 	// Implements a test for each benchmark. Execute with:

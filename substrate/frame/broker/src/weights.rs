@@ -111,6 +111,8 @@ pub trait WeightInfo {
 	fn process_tick_action_refund() -> Weight;
 	fn process_tick_action_sale_rotated(n: u32) -> Weight;
 	fn process_tick_action_timeslice_commited(n: u32) -> Weight;
+	fn market_sale_rotated() -> Weight;
+	fn market_last_timeslice_changed() -> Weight;
 }
 
 /// Weights for `pallet_broker` using the Substrate node and recommended hardware.
@@ -586,6 +588,14 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 	fn process_tick_action_timeslice_commited(n: u32) -> Weight {
 		Weight::zero()
 	}
+
+	fn market_sale_rotated() -> Weight {
+		Weight::zero()
+	}
+
+	fn market_last_timeslice_changed() -> Weight {
+		Weight::zero()
+	}
 }
 
 // For backwards compatibility and tests.
@@ -1058,6 +1068,14 @@ impl WeightInfo for () {
 	}
 
 	fn process_tick_action_timeslice_commited(n: u32) -> Weight {
+		Weight::zero()
+	}
+	
+	fn market_sale_rotated() -> Weight {
+		Weight::zero()
+	}
+
+	fn market_last_timeslice_changed() -> Weight {
 		Weight::zero()
 	}
 }

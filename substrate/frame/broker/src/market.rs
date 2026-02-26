@@ -21,13 +21,12 @@ use frame_system::pallet_prelude::AccountIdFor;
 use sp_arithmetic::FixedPointNumber;
 use sp_core::Get;
 use sp_runtime::{traits::Zero, DispatchError, FixedU64, SaturatedConversion, Saturating};
-use std::marker::PhantomData;
 
 use crate::{
-	utility_impls::CoreCountProviderImpl, AdaptPrice, AdaptedPrices, BalanceOf, BidIdOf, Config,
-	ConfigRecordOf, Configuration, CoreIndex, Leases, Pallet, PotentialRenewalId, RCBlockNumberOf,
-	RelayBlockNumberOf, Reservations, SaleInfo, SaleInfoRecord, SaleInfoRecordOf, SalePerformance,
-	Status, StatusRecord, Timeslice,
+	utility_impls::CoreCountProviderImpl, weights::WeightInfo, AdaptPrice, AdaptedPrices,
+	BalanceOf, BidIdOf, Config, ConfigRecordOf, Configuration, CoreIndex, Leases, Pallet,
+	PotentialRenewalId, RCBlockNumberOf, RelayBlockNumberOf, Reservations, SaleInfo,
+	SaleInfoRecord, SaleInfoRecordOf, SalePerformance, Status, StatusRecord, Timeslice,
 };
 
 // TODO: Extend the documentation.
@@ -320,7 +319,6 @@ impl<T: Config> Market<T> for Pallet<T> {
 		Err(MarketError::BidNotExist)
 	}
 
-	// TODO: Consume weight for code under ifs.
 	fn tick(
 		block_number: RelayBlockNumberOf<T>,
 		weight_meter: &mut WeightMeter,
@@ -336,18 +334,11 @@ impl<T: Config> Market<T> for Pallet<T> {
 			next_timeslice_to_commit::<T>(block_number, &config, &status)
 		{
 			status.last_committed_timeslice = commit_timeslice;
+
 			if let Some(sale) = SaleInfo::<T>::get() {
 				if commit_timeslice >= sale.region_begin {
-					let reserved_cores = Self::CoreCount::reserved_core_count();
-					let (new_prices, new_sale) =
-						rotate_sale::<T>(&sale, &config, &status, reserved_cores, block_number);
-					let start_price = sell_price::<T>(block_number, &new_sale);
-					actions.push(TickAction::SaleRotated {
-						old_sale: sale,
-						new_sale,
-						new_prices,
-						start_price,
-					});
+					weight_meter.consume(T::WeightInfo::market_sale_rotated());
+					sale_rotated::<T, Self>(sale, &config, &status, block_number, &mut actions);
 				}
 			}
 
@@ -356,19 +347,39 @@ impl<T: Config> Market<T> for Pallet<T> {
 
 		let current_timeslice = current_timeslice::<T>(block_number);
 		if status.last_timeslice < current_timeslice {
-			status.last_timeslice.saturating_inc();
-			let rc_block = T::TimeslicePeriod::get() * status.last_timeslice.into();
-
-			actions.push(TickAction::LastTimesliceChanged {
-				last_timeslice: status.last_timeslice,
-				rc_block,
-			});
+			weight_meter.consume(T::WeightInfo::market_last_timeslice_changed());
+			last_timeslice_changed(&mut status, &mut actions);
 		}
 
 		Status::<T>::put(status);
 
 		actions
 	}
+}
+
+pub(crate) fn last_timeslice_changed<T: Config>(
+	status: &mut StatusRecord,
+	actions: &mut Vec<TickAction<T, BidIdOf<T>>>,
+) {
+	status.last_timeslice.saturating_inc();
+	let rc_block = T::TimeslicePeriod::get() * status.last_timeslice.into();
+
+	actions
+		.push(TickAction::LastTimesliceChanged { last_timeslice: status.last_timeslice, rc_block });
+}
+
+pub(crate) fn sale_rotated<T: Config, M: Market<T>>(
+	sale: SaleInfoRecordOf<T>,
+	config: &ConfigRecordOf<T>,
+	status: &StatusRecord,
+	block_number: RelayBlockNumberOf<T>,
+	actions: &mut Vec<TickAction<T, BidIdOf<T>>>,
+) {
+	let reserved_cores = M::CoreCount::reserved_core_count();
+	let (new_prices, new_sale) =
+		rotate_sale::<T>(&sale, config, status, reserved_cores, block_number);
+	let start_price = sell_price::<T>(block_number, &new_sale);
+	actions.push(TickAction::SaleRotated { old_sale: sale, new_sale, new_prices, start_price });
 }
 
 fn purchase_core<T: Config>(
@@ -384,7 +395,10 @@ fn purchase_core<T: Config>(
 	core
 }
 
-pub(crate) fn sell_price<T: Config>(now: RelayBlockNumberOf<T>, sale: &SaleInfoRecordOf<T>) -> BalanceOf<T> {
+fn sell_price<T: Config>(
+	now: RelayBlockNumberOf<T>,
+	sale: &SaleInfoRecordOf<T>,
+) -> BalanceOf<T> {
 	let num = now.saturating_sub(sale.sale_start).min(sale.leadin_length).saturated_into();
 	let through = FixedU64::from_rational(num, sale.leadin_length.saturated_into());
 	leadin_factor_at(through).saturating_mul_int(sale.end_price)
@@ -438,7 +452,7 @@ fn adapt_prices<T: Config>(old_sale: &SaleInfoRecordOf<T>) -> AdaptedPrices<Bala
 	new_prices
 }
 
-pub(crate) fn rotate_sale<T: Config>(
+fn rotate_sale<T: Config>(
 	old_sale: &SaleInfoRecordOf<T>,
 	config: &ConfigRecordOf<T>,
 	status: &StatusRecord,
