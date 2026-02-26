@@ -168,10 +168,10 @@ impl<T: Config> Pallet<T> {
 				Self::refund(&who, amount).defensive_ok();
 			},
 			TickAction::SaleRotated { old_sale, new_sale, new_prices, start_price } => {
-				meter.consume(T::WeightInfo::process_tick_action_sale_rotated());
-
 				// TODO: Figure out how to properly read status here.
 				let status = Status::<T>::get().unwrap();
+
+				meter.consume(T::WeightInfo::process_tick_action_sale_rotated(status.core_count.into()));
 
 				Self::rotate_sale(&old_sale, &new_sale, new_prices, start_price, &status);
 			},

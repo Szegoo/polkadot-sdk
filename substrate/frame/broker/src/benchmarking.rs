@@ -868,136 +868,6 @@ mod benches {
 	}
 
 	#[benchmark]
-	fn rotate_sale(n: Linear<0, { MAX_CORE_COUNT.into() }>) -> Result<(), BenchmarkError> {
-		let config = new_config_record::<T>();
-		Configuration::<T>::put(config.clone());
-
-		// Ensure there is one buyable core then use the rest to max out reservations and leases, if
-		// possible for worst case.
-
-		// First allocate up to MaxReservedCores for reservations
-		let n_reservations = T::MaxReservedCores::get().min(n.saturating_sub(1));
-		setup_reservations::<T>(n_reservations);
-		// Then allocate remaining cores to leases, up to MaxLeasedCores
-		let n_leases =
-			T::MaxLeasedCores::get().min(n.saturating_sub(1).saturating_sub(n_reservations));
-		setup_leases::<T>(n_leases, 1, 20);
-
-		// Start sales so we can test the auto-renewals.
-		let initial_price = 10_000_000u32.into();
-		let (start_price, _) = get_start_end_price::<T>(initial_price);
-		Broker::<T>::do_start_sales(
-			initial_price,
-			n.saturating_sub(n_reservations)
-				.saturating_sub(n_leases)
-				.try_into()
-				.expect("Upper limit of n is a u16."),
-		)
-		.expect("Configuration was initialized before; qed");
-
-		// Advance to the fixed price period.
-		advance_to::<T>(2);
-
-		// Assume max auto renewals for worst case. This is between 1 and the value of
-		// MaxAutoRenewals.
-		let n_renewable = T::MaxAutoRenewals::get()
-			.min(n.saturating_sub(n_leases).saturating_sub(n_reservations));
-
-		let timeslice_period: u32 = T::TimeslicePeriod::get().try_into().ok().unwrap();
-		let sale = SaleInfo::<T>::get().expect("Sale has started.");
-
-		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
-		let price = Broker::<T>::sale_price(&sale, now);
-		(0..n_renewable.into()).try_for_each(|indx| -> Result<(), BenchmarkError> {
-			let task = 1000 + indx;
-			let caller: T::AccountId = T::SovereignAccountOf::maybe_convert(task)
-				.expect("Failed to get sovereign account");
-			T::Currency::set_balance(
-				&caller.clone(),
-				T::Currency::minimum_balance()
-					.saturating_add(start_price)
-					.saturating_add(start_price),
-			);
-
-			let region = Broker::<T>::do_purchase(caller.clone(), start_price)
-				.expect("Offer not high enough for configuration.");
-
-			Broker::<T>::do_assign(region, None, task, Final)
-				.map_err(|_| BenchmarkError::Weightless)?;
-
-			Broker::<T>::do_enable_auto_renew(caller, region.core, task, Some(sale.region_end))?;
-
-			Ok(())
-		})?;
-
-		// Advance to the block before the rotate_sale in which the auto-renewals will take place.
-		let rotate_block = timeslice_period.saturating_mul(config.region_length) - 2;
-		advance_to::<T>(rotate_block - 1);
-
-		// Advance one block and manually tick so we can isolate the `rotate_sale` call.
-		System::<T>::set_block_number(rotate_block.into());
-		RCBlockNumberProviderOf::<T::Coretime>::set_block_number(rotate_block.into());
-		let mut status = Status::<T>::get().expect("Sale has started.");
-		let sale = SaleInfo::<T>::get().expect("Sale has started.");
-		Broker::<T>::process_core_count(&mut status);
-		Broker::<T>::process_revenue();
-		status.last_committed_timeslice = config.region_length;
-
-		#[block]
-		{
-			Broker::<T>::rotate_sale(sale.clone(), &config, &status);
-		}
-
-		// Get prices from the actual price adapter.
-		let new_prices = T::PriceAdapter::adapt_price(SalePerformance::from_sale(&sale));
-		let new_sale = SaleInfo::<T>::get().expect("Sale has started.");
-		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
-		let sale_start = config.interlude_length.saturating_add(rotate_block.into());
-
-		assert_has_event::<T>(
-			Event::SaleInitialized {
-				sale_start,
-				leadin_length: 1u32.into(),
-				start_price: Broker::<T>::sale_price(&new_sale, now),
-				end_price: new_prices.end_price,
-				region_begin: sale.region_begin + config.region_length,
-				region_end: sale.region_end + config.region_length,
-				ideal_cores_sold: 0,
-				cores_offered: n
-					.saturating_sub(n_reservations)
-					.saturating_sub(n_leases)
-					.try_into()
-					.unwrap(),
-			}
-			.into(),
-		);
-
-		// Make sure all cores got renewed:
-		(0..n_renewable).for_each(|indx| {
-			let task = 1000 + indx;
-			let who = T::SovereignAccountOf::maybe_convert(task)
-				.expect("Failed to get sovereign account");
-			assert_has_event::<T>(
-				Event::Renewed {
-					who,
-					old_core: n_reservations as u16 + n_leases as u16 + indx as u16,
-					core: n_reservations as u16 + n_leases as u16 + indx as u16,
-					price,
-					begin: new_sale.region_begin,
-					duration: config.region_length,
-					workload: Schedule::truncate_from(vec![ScheduleItem {
-						assignment: Task(task),
-						mask: CoreMask::complete(),
-					}]),
-				}
-				.into(),
-			);
-		});
-
-		Ok(())
-	}
-
-	#[benchmark]
 	fn process_pool() {
 		let when = 10u32.into();
 		let private_pool_size = 5u32.into();
@@ -1407,11 +1277,149 @@ mod benches {
 	}
 
 	#[benchmark]
-	fn process_tick_action_sale_rotated() {
-		#[block]
-		{}
+	fn process_tick_action_sale_rotated(
+		n: Linear<0, { MAX_CORE_COUNT.into() }>,
+	) -> Result<(), BenchmarkError> {
+		let config = new_config_record::<T>();
+		Configuration::<T>::put(config.clone());
 
-		todo!()
+		// Ensure there is one buyable core then use the rest to max out reservations and leases, if
+		// possible for worst case.
+
+		// First allocate up to MaxReservedCores for reservations
+		let n_reservations = T::MaxReservedCores::get().min(n.saturating_sub(1));
+		setup_reservations::<T>(n_reservations);
+		// Then allocate remaining cores to leases, up to MaxLeasedCores
+		let n_leases =
+			T::MaxLeasedCores::get().min(n.saturating_sub(1).saturating_sub(n_reservations));
+		setup_leases::<T>(n_leases, 1, 20);
+
+		// Start sales so we can test the auto-renewals.
+		let initial_price = 10_000_000u32.into();
+		let (start_price, _) = get_start_end_price::<T>(initial_price);
+		Broker::<T>::do_start_sales(
+			initial_price,
+			n.saturating_sub(n_reservations)
+				.saturating_sub(n_leases)
+				.try_into()
+				.expect("Upper limit of n is a u16."),
+		)
+		.expect("Configuration was initialized before; qed");
+
+		// Advance to the fixed price period.
+		advance_to::<T>(2);
+
+		// Assume max auto renewals for worst case. This is between 1 and the value of
+		// MaxAutoRenewals.
+		let n_renewable = T::MaxAutoRenewals::get()
+			.min(n.saturating_sub(n_leases).saturating_sub(n_reservations));
+
+		let timeslice_period: u32 = T::TimeslicePeriod::get().try_into().ok().unwrap();
+		let sale = SaleInfo::<T>::get().expect("Sale has started.");
+
+		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
+		let price = Broker::<T>::sale_price(&sale, now);
+		(0..n_renewable.into()).try_for_each(|indx| -> Result<(), BenchmarkError> {
+			let task = 1000 + indx;
+			let caller: T::AccountId = T::SovereignAccountOf::maybe_convert(task)
+				.expect("Failed to get sovereign account");
+			T::Currency::set_balance(
+				&caller.clone(),
+				T::Currency::minimum_balance()
+					.saturating_add(start_price)
+					.saturating_add(start_price),
+			);
+
+			let region = Broker::<T>::do_purchase(caller.clone(), start_price)
+				.expect("Offer not high enough for configuration.");
+
+			Broker::<T>::do_assign(region, None, task, Final)
+				.map_err(|_| BenchmarkError::Weightless)?;
+
+			Broker::<T>::do_enable_auto_renew(caller, region.core, task, Some(sale.region_end))?;
+
+			Ok(())
+		})?;
+
+		// Advance to the block before the rotate_sale in which the auto-renewals will take place.
+		let rotate_block = timeslice_period.saturating_mul(config.region_length) - 2;
+		advance_to::<T>(rotate_block - 1);
+
+		// Advance one block and manually tick so we can isolate the `rotate_sale` call.
+		System::<T>::set_block_number(rotate_block.into());
+		RCBlockNumberProviderOf::<T::Coretime>::set_block_number(rotate_block.into());
+		let mut status = Status::<T>::get().expect("Sale has started.");
+		let sale = SaleInfo::<T>::get().expect("Sale has started.");
+		Broker::<T>::process_core_count(&mut status);
+		Broker::<T>::process_revenue();
+		status.last_committed_timeslice = config.region_length;
+
+		let block = RCBlockNumberProviderOf::<T::Coretime>::get_block();
+		let reserved_cores = <Broker<T> as Market<T>>::CoreCount::reserved_core_count();
+		let (new_prices, new_sale) =
+			market::rotate_sale::<T>(&sale, &config, &status, reserved_cores, block);
+		let start_price = market::sell_price::<T>(block, &new_sale);
+		let action  = TickAction::SaleRotated {
+			old_sale: sale,
+			new_sale,
+			new_prices,
+			start_price,
+		};
+
+		let mut meter = WeightMeter::new();
+
+		#[block]
+		{
+			Broker::<T>::process_tick_action(action, &mut meter);
+		}
+
+		// Get prices from the actual price adapter.
+		let new_prices = T::PriceAdapter::adapt_price(SalePerformance::from_sale(&sale));
+		let new_sale = SaleInfo::<T>::get().expect("Sale has started.");
+		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
+		let sale_start = config.interlude_length.saturating_add(rotate_block.into());
+
+		assert_has_event::<T>(
+			Event::SaleInitialized {
+				sale_start,
+				leadin_length: 1u32.into(),
+				start_price: Broker::<T>::sale_price(&new_sale, now),
+				end_price: new_prices.end_price,
+				region_begin: sale.region_begin + config.region_length,
+				region_end: sale.region_end + config.region_length,
+				ideal_cores_sold: 0,
+				cores_offered: n
+					.saturating_sub(n_reservations)
+					.saturating_sub(n_leases)
+					.try_into()
+					.unwrap(),
+			}
+			.into(),
+		);
+
+		// Make sure all cores got renewed:
+		(0..n_renewable).for_each(|indx| {
+			let task = 1000 + indx;
+			let who = T::SovereignAccountOf::maybe_convert(task)
+				.expect("Failed to get sovereign account");
+			assert_has_event::<T>(
+				Event::Renewed {
+					who,
+					old_core: n_reservations as u16 + n_leases as u16 + indx as u16,
+					core: n_reservations as u16 + n_leases as u16 + indx as u16,
+					price,
+					begin: new_sale.region_begin,
+					duration: config.region_length,
+					workload: Schedule::truncate_from(vec![ScheduleItem {
+						assignment: Task(task),
+						mask: CoreMask::complete(),
+					}]),
+				}
+				.into(),
+			);
+		});
+
+		Ok(())
 	}
 
 	#[benchmark]

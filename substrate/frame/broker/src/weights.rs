@@ -94,7 +94,6 @@ pub trait WeightInfo {
 	fn request_core_count(n: u32, ) -> Weight;
 	fn process_core_count(n: u32, ) -> Weight;
 	fn process_revenue() -> Weight;
-	fn rotate_sale(n: u32, ) -> Weight;
 	fn process_pool() -> Weight;
 	fn process_core_schedule() -> Weight;
 	fn request_revenue_info_at() -> Weight;
@@ -112,7 +111,7 @@ pub trait WeightInfo {
 	fn process_tick_action_renew_region() -> Weight;
 	fn process_tick_action_sell_region() -> Weight;
 	fn process_tick_action_refund() -> Weight;
-	fn process_tick_action_sale_rotated() -> Weight;
+	fn process_tick_action_sale_rotated(n: u32) -> Weight;
 	fn process_tick_action_timeslice_commited() -> Weight;
 }
 
@@ -430,39 +429,6 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 			.saturating_add(T::DbWeight::get().reads(3_u64))
 			.saturating_add(T::DbWeight::get().writes(3_u64))
 	}
-	/// Storage: `Broker::InstaPoolIo` (r:3 w:3)
-	/// Proof: `Broker::InstaPoolIo` (`max_values`: None, `max_size`: Some(28), added: 2503, mode: `MaxEncodedLen`)
-	/// Storage: `Broker::Reservations` (r:1 w:0)
-	/// Proof: `Broker::Reservations` (`max_values`: Some(1), `max_size`: Some(6011), added: 6506, mode: `MaxEncodedLen`)
-	/// Storage: `Broker::Leases` (r:1 w:1)
-	/// Proof: `Broker::Leases` (`max_values`: Some(1), `max_size`: Some(41), added: 536, mode: `MaxEncodedLen`)
-	/// Storage: `Broker::AutoRenewals` (r:1 w:1)
-	/// Proof: `Broker::AutoRenewals` (`max_values`: Some(1), `max_size`: Some(101), added: 596, mode: `MaxEncodedLen`)
-	/// Storage: `Broker::Configuration` (r:1 w:0)
-	/// Proof: `Broker::Configuration` (`max_values`: Some(1), `max_size`: Some(31), added: 526, mode: `MaxEncodedLen`)
-	/// Storage: `Broker::Status` (r:1 w:0)
-	/// Proof: `Broker::Status` (`max_values`: Some(1), `max_size`: Some(18), added: 513, mode: `MaxEncodedLen`)
-	/// Storage: `Broker::PotentialRenewals` (r:10 w:20)
-	/// Proof: `Broker::PotentialRenewals` (`max_values`: None, `max_size`: Some(1233), added: 3708, mode: `MaxEncodedLen`)
-	/// Storage: `System::Account` (r:10 w:10)
-	/// Proof: `System::Account` (`max_values`: None, `max_size`: Some(128), added: 2603, mode: `MaxEncodedLen`)
-	/// Storage: `Broker::SaleInfo` (r:0 w:1)
-	/// Proof: `Broker::SaleInfo` (`max_values`: Some(1), `max_size`: Some(57), added: 552, mode: `MaxEncodedLen`)
-	/// Storage: `Broker::Workplan` (r:0 w:1000)
-	/// Proof: `Broker::Workplan` (`max_values`: None, `max_size`: Some(1216), added: 3691, mode: `MaxEncodedLen`)
-	/// The range of component `n` is `[0, 1000]`.
-	fn rotate_sale(n: u32, ) -> Weight {
-		// Proof Size summary in bytes:
-		//  Measured:  `8126`
-		//  Estimated: `38070`
-		// Minimum execution time: 21_763_000 picoseconds.
-		Weight::from_parts(325_729_398, 38070)
-			// Standard Error: 6_937
-			.saturating_add(Weight::from_parts(1_323_585, 0).saturating_mul(n.into()))
-			.saturating_add(T::DbWeight::get().reads(26_u64))
-			.saturating_add(T::DbWeight::get().writes(34_u64))
-			.saturating_add(T::DbWeight::get().writes((1_u64).saturating_mul(n.into())))
-	}
 	/// Storage: `Broker::InstaPoolIo` (r:1 w:0)
 	/// Proof: `Broker::InstaPoolIo` (`max_values`: None, `max_size`: Some(28), added: 2503, mode: `MaxEncodedLen`)
 	/// Storage: `Broker::InstaPoolHistory` (r:0 w:1)
@@ -641,7 +607,7 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 		Weight::zero()
 	}
 
-	fn process_tick_action_sale_rotated() -> Weight {
+	fn process_tick_action_sale_rotated(n: u32) -> Weight {
 		Weight::zero()
 	}
 
@@ -963,39 +929,6 @@ impl WeightInfo for () {
 			.saturating_add(RocksDbWeight::get().reads(3_u64))
 			.saturating_add(RocksDbWeight::get().writes(3_u64))
 	}
-	/// Storage: `Broker::InstaPoolIo` (r:3 w:3)
-	/// Proof: `Broker::InstaPoolIo` (`max_values`: None, `max_size`: Some(28), added: 2503, mode: `MaxEncodedLen`)
-	/// Storage: `Broker::Reservations` (r:1 w:0)
-	/// Proof: `Broker::Reservations` (`max_values`: Some(1), `max_size`: Some(6011), added: 6506, mode: `MaxEncodedLen`)
-	/// Storage: `Broker::Leases` (r:1 w:1)
-	/// Proof: `Broker::Leases` (`max_values`: Some(1), `max_size`: Some(41), added: 536, mode: `MaxEncodedLen`)
-	/// Storage: `Broker::AutoRenewals` (r:1 w:1)
-	/// Proof: `Broker::AutoRenewals` (`max_values`: Some(1), `max_size`: Some(101), added: 596, mode: `MaxEncodedLen`)
-	/// Storage: `Broker::Configuration` (r:1 w:0)
-	/// Proof: `Broker::Configuration` (`max_values`: Some(1), `max_size`: Some(31), added: 526, mode: `MaxEncodedLen`)
-	/// Storage: `Broker::Status` (r:1 w:0)
-	/// Proof: `Broker::Status` (`max_values`: Some(1), `max_size`: Some(18), added: 513, mode: `MaxEncodedLen`)
-	/// Storage: `Broker::PotentialRenewals` (r:10 w:20)
-	/// Proof: `Broker::PotentialRenewals` (`max_values`: None, `max_size`: Some(1233), added: 3708, mode: `MaxEncodedLen`)
-	/// Storage: `System::Account` (r:10 w:10)
-	/// Proof: `System::Account` (`max_values`: None, `max_size`: Some(128), added: 2603, mode: `MaxEncodedLen`)
-	/// Storage: `Broker::SaleInfo` (r:0 w:1)
-	/// Proof: `Broker::SaleInfo` (`max_values`: Some(1), `max_size`: Some(57), added: 552, mode: `MaxEncodedLen`)
-	/// Storage: `Broker::Workplan` (r:0 w:1000)
-	/// Proof: `Broker::Workplan` (`max_values`: None, `max_size`: Some(1216), added: 3691, mode: `MaxEncodedLen`)
-	/// The range of component `n` is `[0, 1000]`.
-	fn rotate_sale(n: u32, ) -> Weight {
-		// Proof Size summary in bytes:
-		//  Measured:  `8126`
-		//  Estimated: `38070`
-		// Minimum execution time: 21_763_000 picoseconds.
-		Weight::from_parts(325_729_398, 38070)
-			// Standard Error: 6_937
-			.saturating_add(Weight::from_parts(1_323_585, 0).saturating_mul(n.into()))
-			.saturating_add(RocksDbWeight::get().reads(26_u64))
-			.saturating_add(RocksDbWeight::get().writes(34_u64))
-			.saturating_add(RocksDbWeight::get().writes((1_u64).saturating_mul(n.into())))
-	}
 	/// Storage: `Broker::InstaPoolIo` (r:1 w:0)
 	/// Proof: `Broker::InstaPoolIo` (`max_values`: None, `max_size`: Some(28), added: 2503, mode: `MaxEncodedLen`)
 	/// Storage: `Broker::InstaPoolHistory` (r:0 w:1)
@@ -1174,7 +1107,7 @@ impl WeightInfo for () {
 		Weight::zero()
 	}
 
-	fn process_tick_action_sale_rotated() -> Weight {
+	fn process_tick_action_sale_rotated(n: u32) -> Weight {
 		Weight::zero()
 	}
 
