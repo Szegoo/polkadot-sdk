@@ -94,8 +94,6 @@ pub trait WeightInfo {
 	fn request_core_count(n: u32, ) -> Weight;
 	fn process_core_count(n: u32, ) -> Weight;
 	fn process_revenue() -> Weight;
-	fn process_pool() -> Weight;
-	fn process_core_schedule() -> Weight;
 	fn request_revenue_info_at() -> Weight;
 	fn notify_core_count() -> Weight;
 	fn notify_revenue() -> Weight;
@@ -112,7 +110,7 @@ pub trait WeightInfo {
 	fn process_tick_action_sell_region() -> Weight;
 	fn process_tick_action_refund() -> Weight;
 	fn process_tick_action_sale_rotated(n: u32) -> Weight;
-	fn process_tick_action_timeslice_commited() -> Weight;
+	fn process_tick_action_timeslice_commited(n: u32) -> Weight;
 }
 
 /// Weights for `pallet_broker` using the Substrate node and recommended hardware.
@@ -429,32 +427,6 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 			.saturating_add(T::DbWeight::get().reads(3_u64))
 			.saturating_add(T::DbWeight::get().writes(3_u64))
 	}
-	/// Storage: `Broker::InstaPoolIo` (r:1 w:0)
-	/// Proof: `Broker::InstaPoolIo` (`max_values`: None, `max_size`: Some(28), added: 2503, mode: `MaxEncodedLen`)
-	/// Storage: `Broker::InstaPoolHistory` (r:0 w:1)
-	/// Proof: `Broker::InstaPoolHistory` (`max_values`: None, `max_size`: Some(45), added: 2520, mode: `MaxEncodedLen`)
-	fn process_pool() -> Weight {
-		// Proof Size summary in bytes:
-		//  Measured:  `0`
-		//  Estimated: `3493`
-		// Minimum execution time: 5_015_000 picoseconds.
-		Weight::from_parts(5_306_000, 3493)
-			.saturating_add(T::DbWeight::get().reads(1_u64))
-			.saturating_add(T::DbWeight::get().writes(1_u64))
-	}
-	/// Storage: `Broker::Workplan` (r:1 w:1)
-	/// Proof: `Broker::Workplan` (`max_values`: None, `max_size`: Some(1216), added: 3691, mode: `MaxEncodedLen`)
-	/// Storage: `Broker::Workload` (r:1 w:1)
-	/// Proof: `Broker::Workload` (`max_values`: None, `max_size`: Some(1212), added: 3687, mode: `MaxEncodedLen`)
-	fn process_core_schedule() -> Weight {
-		// Proof Size summary in bytes:
-		//  Measured:  `1223`
-		//  Estimated: `4681`
-		// Minimum execution time: 11_737_000 picoseconds.
-		Weight::from_parts(12_121_000, 4681)
-			.saturating_add(T::DbWeight::get().reads(2_u64))
-			.saturating_add(T::DbWeight::get().writes(2_u64))
-	}
 	fn request_revenue_info_at() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `0`
@@ -611,7 +583,7 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 		Weight::zero()
 	}
 
-	fn process_tick_action_timeslice_commited() -> Weight {
+	fn process_tick_action_timeslice_commited(n: u32) -> Weight {
 		Weight::zero()
 	}
 }
@@ -929,32 +901,6 @@ impl WeightInfo for () {
 			.saturating_add(RocksDbWeight::get().reads(3_u64))
 			.saturating_add(RocksDbWeight::get().writes(3_u64))
 	}
-	/// Storage: `Broker::InstaPoolIo` (r:1 w:0)
-	/// Proof: `Broker::InstaPoolIo` (`max_values`: None, `max_size`: Some(28), added: 2503, mode: `MaxEncodedLen`)
-	/// Storage: `Broker::InstaPoolHistory` (r:0 w:1)
-	/// Proof: `Broker::InstaPoolHistory` (`max_values`: None, `max_size`: Some(45), added: 2520, mode: `MaxEncodedLen`)
-	fn process_pool() -> Weight {
-		// Proof Size summary in bytes:
-		//  Measured:  `0`
-		//  Estimated: `3493`
-		// Minimum execution time: 5_015_000 picoseconds.
-		Weight::from_parts(5_306_000, 3493)
-			.saturating_add(RocksDbWeight::get().reads(1_u64))
-			.saturating_add(RocksDbWeight::get().writes(1_u64))
-	}
-	/// Storage: `Broker::Workplan` (r:1 w:1)
-	/// Proof: `Broker::Workplan` (`max_values`: None, `max_size`: Some(1216), added: 3691, mode: `MaxEncodedLen`)
-	/// Storage: `Broker::Workload` (r:1 w:1)
-	/// Proof: `Broker::Workload` (`max_values`: None, `max_size`: Some(1212), added: 3687, mode: `MaxEncodedLen`)
-	fn process_core_schedule() -> Weight {
-		// Proof Size summary in bytes:
-		//  Measured:  `1223`
-		//  Estimated: `4681`
-		// Minimum execution time: 11_737_000 picoseconds.
-		Weight::from_parts(12_121_000, 4681)
-			.saturating_add(RocksDbWeight::get().reads(2_u64))
-			.saturating_add(RocksDbWeight::get().writes(2_u64))
-	}
 	fn request_revenue_info_at() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `0`
@@ -1111,7 +1057,7 @@ impl WeightInfo for () {
 		Weight::zero()
 	}
 
-	fn process_tick_action_timeslice_commited() -> Weight {
+	fn process_tick_action_timeslice_commited(n: u32) -> Weight {
 		Weight::zero()
 	}
 }

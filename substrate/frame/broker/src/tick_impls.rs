@@ -176,10 +176,10 @@ impl<T: Config> Pallet<T> {
 				Self::rotate_sale(&old_sale, &new_sale, new_prices, start_price, &status);
 			},
 			TickAction::TimesliceCommited { timeslice } => {
-				meter.consume(T::WeightInfo::process_tick_action_timeslice_commited());
-
 				// TODO: Figure out how to properly read and write status here.
 				let mut status = Status::<T>::get().unwrap();
+
+				meter.consume(T::WeightInfo::process_tick_action_timeslice_commited(status.core_count.into()));
 
 				Self::process_pool(timeslice, &mut status);
 
