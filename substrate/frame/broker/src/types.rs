@@ -16,12 +16,12 @@
 // limitations under the License.
 
 use crate::{
-	AdaptedPrices, Config, CoreAssignment, CoreIndex, CoreMask, CoretimeInterface, Market, Pallet,
+	Config, CoreAssignment, CoreIndex, CoreMask, CoretimeInterface, Market, Pallet,
 	RCBlockNumberOf, TaskId, CORE_MASK_BITS,
 };
 use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
 use frame_support::traits::fungible::Inspect;
-use frame_system::{pallet_prelude::AccountIdFor, Config as SConfig};
+use frame_system::Config as SConfig;
 use scale_info::TypeInfo;
 use sp_arithmetic::Perbill;
 use sp_core::ConstU32;

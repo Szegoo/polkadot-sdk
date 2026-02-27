@@ -18,9 +18,9 @@
 #![deny(missing_docs)]
 
 use crate::{CoreIndex, SaleInfoRecord};
-use sp_arithmetic::{traits::One, FixedU64};
+use sp_arithmetic::FixedU64;
 use sp_core::Get;
-use sp_runtime::{FixedPointNumber, FixedPointOperand, Saturating};
+use sp_runtime::{FixedPointNumber, FixedPointOperand};
 
 /// Performance of a past sale.
 #[derive(Copy, Clone)]

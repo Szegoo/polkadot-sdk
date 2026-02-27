@@ -24,10 +24,7 @@ use frame_support::{
 		OnUnbalanced,
 	},
 };
-use sp_arithmetic::{
-	traits::{SaturatedConversion, Saturating},
-	FixedPointNumber, FixedU64,
-};
+use sp_arithmetic::traits::{SaturatedConversion, Saturating};
 use sp_runtime::traits::{AccountIdConversion, BlockNumberProvider};
 
 impl<T: Config> Pallet<T> {

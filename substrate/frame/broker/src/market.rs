@@ -24,9 +24,9 @@ use sp_runtime::{traits::Zero, DispatchError, FixedU64, SaturatedConversion, Sat
 
 use crate::{
 	utility_impls::CoreCountProviderImpl, weights::WeightInfo, AdaptPrice, AdaptedPrices,
-	BalanceOf, BidIdOf, Config, ConfigRecordOf, Configuration, CoreIndex, Leases, Pallet,
-	PotentialRenewalId, RCBlockNumberOf, RelayBlockNumberOf, Reservations, SaleInfo,
-	SaleInfoRecord, SaleInfoRecordOf, SalePerformance, Status, StatusRecord, Timeslice,
+	BalanceOf, BidIdOf, Config, ConfigRecordOf, Configuration, CoreIndex, Pallet,
+	PotentialRenewalId, RelayBlockNumberOf, SaleInfo, SaleInfoRecord, SaleInfoRecordOf,
+	SalePerformance, Status, StatusRecord, Timeslice,
 };
 
 // TODO: Extend the documentation.
@@ -231,6 +231,7 @@ impl<T: Config> Market<T> for Pallet<T> {
 		let reserved_cores = Self::CoreCount::reserved_core_count();
 		let (new_prices, new_sale) =
 			rotate_sale::<T>(&old_sale, &config, &status, reserved_cores, block_number);
+		SaleInfo::<T>::put(&new_sale);
 
 		Status::<T>::put(&status);
 
@@ -248,11 +249,10 @@ impl<T: Config> Market<T> for Pallet<T> {
 
 	fn place_order(
 		block_number: RelayBlockNumberOf<T>,
-		who: &AccountIdFor<T>,
+		_who: &AccountIdFor<T>,
 		price_limit: BalanceOf<T>,
 	) -> Result<OrderResult<T, Self::BidId>, Self::Error> {
 		let mut sale = SaleInfo::<T>::get().ok_or(MarketError::NoSales)?;
-		// TODO: don't read status here.
 		let status = Status::<T>::get().ok_or(MarketError::Uninitialized)?;
 
 		ensure!(sale.first_core < status.core_count, MarketError::Unavailable);
@@ -266,7 +266,7 @@ impl<T: Config> Market<T> for Pallet<T> {
 			return Err(MarketError::Overpriced)
 		};
 
-		let core = purchase_core::<T>(who, sell_price, &mut sale);
+		let core = purchase_core::<T>(sell_price, &mut sale);
 		SaleInfo::<T>::put(&sale);
 
 		Ok(OrderResult::Sold {
@@ -281,15 +281,12 @@ impl<T: Config> Market<T> for Pallet<T> {
 	// potential renewal or not.
 	fn place_renewal_order(
 		block_number: RelayBlockNumberOf<T>,
-		who: &AccountIdFor<T>,
-		renewal: PotentialRenewalId,
+		_who: &AccountIdFor<T>,
+		_renewal: PotentialRenewalId,
 		recorded_price: BalanceOf<T>,
 	) -> Result<RenewalOrderResult<T, Self::BidId>, Self::Error> {
-		// TODO: Store `config.renewal_bump` in the market config.
 		let config = Configuration::<T>::get().ok_or(MarketError::Uninitialized)?;
-		// TODO: don't read status here.
 		let status = Status::<T>::get().ok_or(MarketError::Uninitialized)?;
-		// TODO: Don't access main pallet storage here.
 		let mut sale = SaleInfo::<T>::get().ok_or(MarketError::NoSales)?;
 
 		ensure!(sale.first_core < status.core_count, MarketError::Unavailable);
@@ -300,7 +297,7 @@ impl<T: Config> Market<T> for Pallet<T> {
 		let sell_price = sell_price::<T>(block_number, &sale);
 		let next_renewal_price = sell_price.min(price_cap);
 
-		let core = purchase_core::<T>(who, recorded_price, &mut sale);
+		let core = purchase_core::<T>(recorded_price, &mut sale);
 		SaleInfo::<T>::put(&sale);
 
 		return Ok(RenewalOrderResult::Sold {
@@ -313,8 +310,8 @@ impl<T: Config> Market<T> for Pallet<T> {
 	}
 
 	fn close_bid(
-		id: Self::BidId,
-		maybe_check_owner: Option<AccountIdFor<T>>,
+		_id: Self::BidId,
+		_maybe_check_owner: Option<AccountIdFor<T>>,
 	) -> Result<CloseBidResult<T>, Self::Error> {
 		Err(MarketError::BidNotExist)
 	}
@@ -323,10 +320,10 @@ impl<T: Config> Market<T> for Pallet<T> {
 		block_number: RelayBlockNumberOf<T>,
 		weight_meter: &mut WeightMeter,
 	) -> Vec<TickAction<T, Self::BidId>> {
-		// TODO: Store `config.renewal_bump` in the market config.
-		let config = Configuration::<T>::get().unwrap();
-		// TODO: don't read status here.
-		let mut status = Status::<T>::get().unwrap();
+		let (Some(config), Some(mut status)) = (Configuration::<T>::get(), Status::<T>::get())
+		else {
+			return vec![];
+		};
 
 		let mut actions = vec![];
 
@@ -378,15 +375,13 @@ pub(crate) fn sale_rotated<T: Config, M: Market<T>>(
 	let reserved_cores = M::CoreCount::reserved_core_count();
 	let (new_prices, new_sale) =
 		rotate_sale::<T>(&sale, config, status, reserved_cores, block_number);
+	SaleInfo::<T>::put(&new_sale);
+
 	let start_price = sell_price::<T>(block_number, &new_sale);
 	actions.push(TickAction::SaleRotated { old_sale: sale, new_sale, new_prices, start_price });
 }
 
-fn purchase_core<T: Config>(
-	who: &T::AccountId,
-	price: BalanceOf<T>,
-	sale: &mut SaleInfoRecordOf<T>,
-) -> CoreIndex {
+fn purchase_core<T: Config>(price: BalanceOf<T>, sale: &mut SaleInfoRecordOf<T>) -> CoreIndex {
 	let core = sale.first_core.saturating_add(sale.cores_sold);
 	sale.cores_sold.saturating_inc();
 	if sale.cores_sold <= sale.ideal_cores_sold || sale.sellout_price.is_none() {
@@ -395,10 +390,7 @@ fn purchase_core<T: Config>(
 	core
 }
 
-fn sell_price<T: Config>(
-	now: RelayBlockNumberOf<T>,
-	sale: &SaleInfoRecordOf<T>,
-) -> BalanceOf<T> {
+fn sell_price<T: Config>(now: RelayBlockNumberOf<T>, sale: &SaleInfoRecordOf<T>) -> BalanceOf<T> {
 	let num = now.saturating_sub(sale.sale_start).min(sale.leadin_length).saturated_into();
 	let through = FixedU64::from_rational(num, sale.leadin_length.saturated_into());
 	leadin_factor_at(through).saturating_mul_int(sale.end_price)
@@ -489,8 +481,6 @@ fn rotate_sale<T: Config>(
 		cores_offered,
 		cores_sold: 0,
 	};
-
-	SaleInfo::<T>::put(&new_sale);
 
 	(new_prices, new_sale)
 }

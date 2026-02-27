@@ -156,7 +156,7 @@ impl<T: Config> Pallet<T> {
 				Self::deposit_event(Event::BidPlaced { bid_id: id, price: bid_price });
 			},
 			OrderResult::Sold { price, region_begin, region_end, core } => {
-				Self::charge(&who, price);
+				Self::charge(&who, price)?;
 
 				let id = Self::issue(
 					core,
@@ -662,16 +662,6 @@ impl<T: Config> Pallet<T> {
 		Self::refund(&result.owner, result.refund)?;
 
 		Self::deposit_event(Event::BidClosed { bid_id: id, owner: result.owner });
-
-		Ok(())
-	}
-
-	pub(crate) fn ensure_cores_for_sale(
-		status: &StatusRecord,
-		sale: &SaleInfoRecordOf<T>,
-	) -> Result<(), DispatchError> {
-		ensure!(sale.first_core < status.core_count, Error::<T>::Unavailable);
-		ensure!(sale.cores_sold < sale.cores_offered, Error::<T>::SoldOut);
 
 		Ok(())
 	}
