@@ -46,11 +46,11 @@ impl<T: Config> Pallet<T> {
 			meter.consume(T::WeightInfo::process_core_count(status.core_count.into()));
 		}
 
+		Status::<T>::put(&status);
+
 		if Self::process_revenue() {
 			meter.consume(T::WeightInfo::process_revenue());
 		}
-
-		Status::<T>::put(&status);
 
 		Self::process_market_logic(&mut meter);
 
@@ -168,32 +168,36 @@ impl<T: Config> Pallet<T> {
 				Self::refund(&who, amount).defensive_ok();
 			},
 			TickAction::SaleRotated { old_sale, new_sale, new_prices, start_price } => {
-				// TODO: Figure out how to properly read status here.
-				let status = Status::<T>::get().unwrap();
+				if let Some(status) = Status::<T>::get() {
+					meter.consume(T::WeightInfo::process_tick_action_sale_rotated(
+						status.core_count.into(),
+					));
 
-				meter.consume(T::WeightInfo::process_tick_action_sale_rotated(
-					status.core_count.into(),
-				));
-
-				Self::rotate_sale(&old_sale, &new_sale, new_prices, start_price, &status);
+					Self::rotate_sale(&old_sale, &new_sale, new_prices, start_price, &status);
+				} else {
+					// Consume for the storage read.
+					meter.consume(T::WeightInfo::process_tick_action_sale_rotated(0));
+				}
 			},
 			TickAction::TimesliceCommited { timeslice } => {
-				// TODO: Figure out how to properly read and write status here.
-				let mut status = Status::<T>::get().unwrap();
+				if let Some(mut status) = Status::<T>::get() {
+					meter.consume(T::WeightInfo::process_tick_action_timeslice_commited(
+						status.core_count.into(),
+					));
 
-				meter.consume(T::WeightInfo::process_tick_action_timeslice_commited(
-					status.core_count.into(),
-				));
+					Self::process_pool(timeslice, &mut status);
 
-				Self::process_pool(timeslice, &mut status);
+					let timeslice_period = T::TimeslicePeriod::get();
+					let rc_begin = RelayBlockNumberOf::<T>::from(timeslice) * timeslice_period;
+					for core in 0..status.core_count {
+						Self::process_core_schedule(timeslice, rc_begin, core);
+					}
 
-				let timeslice_period = T::TimeslicePeriod::get();
-				let rc_begin = RelayBlockNumberOf::<T>::from(timeslice) * timeslice_period;
-				for core in 0..status.core_count {
-					Self::process_core_schedule(timeslice, rc_begin, core);
+					Status::<T>::put(status);
+				} else {
+					// Consume for the storage read.
+					meter.consume(T::WeightInfo::process_tick_action_timeslice_commited(0));
 				}
-
-				Status::<T>::put(status);
 			},
 			TickAction::LastTimesliceChanged { last_timeslice, rc_block } => {
 				T::Coretime::request_revenue_info_at(rc_block);
