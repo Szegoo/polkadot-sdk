@@ -1343,6 +1343,7 @@ mod benches {
 			Event::SaleInitialized {
 				sale_start,
 				leadin_length: 1u32.into(),
+				// TODO: Fix.
 				start_price: market::sell_price::<T>(now, &new_sale),
 				end_price: new_prices.end_price,
 				region_begin: sale.region_begin + config.region_length,
@@ -1384,7 +1385,6 @@ mod benches {
 
 	#[benchmark]
 	fn process_tick_action_timeslice_commited(n: Linear<0, { MAX_CORE_COUNT.into() }>) {
-		let timeslice = 10u32.into();
 		let private_pool_size = 5u32.into();
 		let system_pool_size = 4u32.into();
 
@@ -1398,13 +1398,15 @@ mod benches {
 			last_timeslice: Broker::<T>::current_timeslice(),
 		};
 
+		let timeslice = status.last_committed_timeslice;
+
 		Status::<T>::put(status.clone());
 
 		for core in 0..status.core_count {
 			Workplan::<T>::insert((timeslice, core), new_schedule());
 		}
 
-		let action = TickAction::TimesliceCommited { timeslice: status.last_committed_timeslice };
+		let action = TickAction::TimesliceCommited { timeslice };
 		let mut meter = WeightMeter::new();
 
 		#[block]

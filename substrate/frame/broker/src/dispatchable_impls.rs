@@ -117,6 +117,8 @@ impl<T: Config> Pallet<T> {
 		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
 		let events = <Self as Market<T>>::start_sales(now, end_price, core_count)?;
 
+		Self::deposit_event(Event::<T>::SalesStarted { price: end_price, core_count });
+
 		for event in events {
 			match event {
 				StartSalesEvent::SalesStarted {
@@ -138,8 +140,6 @@ impl<T: Config> Pallet<T> {
 				},
 			}
 		}
-
-		Self::deposit_event(Event::<T>::SalesStarted { price: end_price, core_count });
 
 		Ok(())
 	}
