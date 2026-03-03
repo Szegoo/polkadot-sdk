@@ -1317,11 +1317,13 @@ mod benches {
 		Broker::<T>::process_core_count(&mut status);
 		Broker::<T>::process_revenue();
 		status.last_committed_timeslice = config.region_length;
+		Status::<T>::put(status.clone());
 
 		let block = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
 		let reserved_cores = <Broker<T> as Market<T>>::CoreCount::reserved_core_count();
 		let (new_prices, new_sale) =
 			market::rotate_sale::<T>(&sale, &config, &status, reserved_cores, block);
+		SaleInfo::<T>::put(new_sale.clone());
 		let start_price = market::sell_price::<T>(block, &new_sale);
 		let action =
 			TickAction::SaleRotated { old_sale: sale.clone(), new_sale, new_prices, start_price };
@@ -1343,8 +1345,7 @@ mod benches {
 			Event::SaleInitialized {
 				sale_start,
 				leadin_length: 1u32.into(),
-				// TODO: Fix.
-				start_price: market::sell_price::<T>(now, &new_sale),
+				start_price,
 				end_price: new_prices.end_price,
 				region_begin: sale.region_begin + config.region_length,
 				region_end: sale.region_end + config.region_length,
