@@ -34,7 +34,7 @@ use sp_arithmetic::{FixedU64, Perbill};
 use sp_core::Get;
 use sp_runtime::{
 	traits::{BlockNumberProvider, MaybeConvert},
-	FixedPointNumber, Saturating,
+	DispatchError, FixedPointNumber, Saturating,
 };
 
 const SEED: u32 = 0;
@@ -138,14 +138,27 @@ fn get_start_end_price<T: Config>(initial_price: BalanceOf<T>) -> (BalanceOf<T>,
 		cores_sold: 0,
 	})
 	.end_price;
-	let start_price = <T as Config>::PriceAdapter::leadin_factor_at(FixedU64::from(0))
-		.saturating_mul_int(end_price);
+	let start_price = market::leadin_factor_at(FixedU64::from(0)).saturating_mul_int(end_price);
 	(start_price, end_price)
+}
+
+fn purchase_and_get_region_id<T: Config>(
+	who: T::AccountId,
+	price_limit: BalanceOf<T>,
+) -> Result<RegionId, DispatchError> {
+	Broker::<T>::do_purchase(who, price_limit)?;
+
+	let sale = SaleInfo::<T>::get().expect("Sale should exist");
+
+	let begin = sale.region_begin;
+	let core = sale.first_core.saturating_add(sale.cores_sold) - 1;
+	let mask = CoreMask::complete();
+
+	Ok(RegionId { begin, core, mask })
 }
 
 #[benchmarks]
 mod benches {
-	use frame_benchmarking::baseline::mock::RuntimeEvent;
 	use frame_support::weights::WeightMeter;
 
 	use super::*;
@@ -342,7 +355,7 @@ mod benches {
 			T::Currency::minimum_balance().saturating_add(sale_data.start_price),
 		);
 
-		let region = Broker::<T>::do_purchase(caller.clone(), sale_data.start_price)
+		let region = purchase_and_get_region_id::<T>(caller.clone(), sale_data.start_price)
 			.expect("Offer not high enough for configuration.");
 
 		Broker::<T>::do_assign(region, None, 1001, Final)
@@ -371,7 +384,7 @@ mod benches {
 			T::Currency::minimum_balance().saturating_add(sale_data.start_price),
 		);
 
-		let region = Broker::<T>::do_purchase(caller.clone(), sale_data.start_price)
+		let region = purchase_and_get_region_id::<T>(caller.clone(), sale_data.start_price)
 			.expect("Offer not high enough for configuration.");
 
 		let recipient: T::AccountId = account("recipient", 0, SEED);
@@ -404,7 +417,7 @@ mod benches {
 			T::Currency::minimum_balance().saturating_add(sale_data.start_price),
 		);
 
-		let region = Broker::<T>::do_purchase(caller.clone(), sale_data.start_price)
+		let region = purchase_and_get_region_id::<T>(caller.clone(), sale_data.start_price)
 			.expect("Offer not high enough for configuration.");
 
 		// Worst case has an existing provisional pool assignment.
@@ -453,7 +466,7 @@ mod benches {
 			T::Currency::minimum_balance().saturating_add(sale_data.start_price),
 		);
 
-		let region = Broker::<T>::do_purchase(caller.clone(), sale_data.start_price)
+		let region = purchase_and_get_region_id::<T>(caller.clone(), sale_data.start_price)
 			.expect("Offer not high enough for configuration.");
 
 		// Worst case has an existing provisional pool assignment.
@@ -494,7 +507,7 @@ mod benches {
 			T::Currency::minimum_balance().saturating_add(sale_data.start_price),
 		);
 
-		let region = Broker::<T>::do_purchase(caller.clone(), sale_data.start_price)
+		let region = purchase_and_get_region_id::<T>(caller.clone(), sale_data.start_price)
 			.expect("Offer not high enough for configuration.");
 
 		// Worst case has an existing provisional pool assignment.
@@ -534,7 +547,7 @@ mod benches {
 			T::Currency::minimum_balance().saturating_add(sale_data.start_price),
 		);
 
-		let region = Broker::<T>::do_purchase(caller.clone(), sale_data.start_price)
+		let region = purchase_and_get_region_id::<T>(caller.clone(), sale_data.start_price)
 			.expect("Offer not high enough for configuration.");
 
 		let recipient: T::AccountId = account("recipient", 0, SEED);
@@ -575,7 +588,7 @@ mod benches {
 			T::Currency::minimum_balance().saturating_add(200_000_000u32.into()),
 		);
 
-		let region = Broker::<T>::do_purchase(caller.clone(), sale_data.start_price)
+		let region = purchase_and_get_region_id::<T>(caller.clone(), sale_data.start_price)
 			.expect("Offer not high enough for configuration.");
 
 		let recipient: T::AccountId = account("recipient", 0, SEED);
@@ -662,7 +675,7 @@ mod benches {
 			T::Currency::minimum_balance().saturating_add(sale_data.start_price),
 		);
 
-		let region = Broker::<T>::do_purchase(caller.clone(), sale_data.start_price)
+		let region = purchase_and_get_region_id::<T>(caller.clone(), sale_data.start_price)
 			.expect("Offer not high enough for configuration.");
 
 		advance_to::<T>(
@@ -697,7 +710,7 @@ mod benches {
 			T::Currency::minimum_balance().saturating_add(sale_data.start_price),
 		);
 
-		let region = Broker::<T>::do_purchase(caller.clone(), sale_data.start_price)
+		let region = purchase_and_get_region_id::<T>(caller.clone(), sale_data.start_price)
 			.expect("Offer not high enough for configuration.");
 
 		let recipient: T::AccountId = account("recipient", 0, SEED);
@@ -995,7 +1008,7 @@ mod benches {
 				T::Currency::minimum_balance().saturating_add(sale_data.start_price),
 			);
 
-			let region = Broker::<T>::do_purchase(caller.clone(), sale_data.start_price)
+			let region = purchase_and_get_region_id::<T>(caller.clone(), sale_data.start_price)
 				.expect("Offer not high enough for configuration.");
 
 			Broker::<T>::do_assign(region, None, task, Final)
@@ -1016,7 +1029,7 @@ mod benches {
 		);
 
 		// The region for which we benchmark enable auto renew.
-		let region = Broker::<T>::do_purchase(caller.clone(), sale_data.start_price)
+		let region = purchase_and_get_region_id::<T>(caller.clone(), sale_data.start_price)
 			.expect("Offer not high enough for configuration.");
 		Broker::<T>::do_assign(region, None, 2001, Final)
 			.map_err(|_| BenchmarkError::Weightless)?;
@@ -1060,7 +1073,7 @@ mod benches {
 				T::Currency::minimum_balance().saturating_add(sale_data.start_price),
 			);
 
-			let region = Broker::<T>::do_purchase(caller.clone(), sale_data.start_price)
+			let region = purchase_and_get_region_id::<T>(caller.clone(), sale_data.start_price)
 				.expect("Offer not high enough for configuration.");
 
 			Broker::<T>::do_assign(region, None, task, Final)
@@ -1096,7 +1109,7 @@ mod benches {
 			T::Currency::minimum_balance().saturating_add(sale_data.start_price),
 		);
 
-		let _region = Broker::<T>::do_purchase(caller.clone(), sale_data.start_price)
+		let _region = purchase_and_get_region_id::<T>(caller.clone(), sale_data.start_price)
 			.expect("Offer not high enough for configuration.");
 
 		let timeslice = Broker::<T>::current_timeslice();
@@ -1121,7 +1134,7 @@ mod benches {
 			T::Currency::minimum_balance().saturating_add(sale_data.start_price),
 		);
 
-		let region = Broker::<T>::do_purchase(caller.clone(), sale_data.start_price)
+		let region = purchase_and_get_region_id::<T>(caller.clone(), sale_data.start_price)
 			.expect("Offer not high enough for configuration.");
 
 		Broker::<T>::do_assign(region, None, 1000, Provisional)
@@ -1147,7 +1160,7 @@ mod benches {
 			T::Currency::minimum_balance().saturating_add(sale_data.start_price),
 		);
 
-		let region_id = Broker::<T>::do_purchase(caller.clone(), sale_data.start_price)
+		let region_id = purchase_and_get_region_id::<T>(caller.clone(), sale_data.start_price)
 			.expect("Offer not high enough for configuration.");
 		let region = Regions::<T>::get(region_id).expect("Requested region not found");
 
@@ -1269,7 +1282,7 @@ mod benches {
 		let sale = SaleInfo::<T>::get().expect("Sale has started.");
 
 		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
-		let price = Broker::<T>::sale_price(&sale, now);
+		let price = market::sell_price::<T>(now, &sale);
 		(0..n_renewable.into()).try_for_each(|indx| -> Result<(), BenchmarkError> {
 			let task = 1000 + indx;
 			let caller: T::AccountId = T::SovereignAccountOf::maybe_convert(task)
@@ -1281,7 +1294,7 @@ mod benches {
 					.saturating_add(start_price),
 			);
 
-			let region = Broker::<T>::do_purchase(caller.clone(), start_price)
+			let region = purchase_and_get_region_id::<T>(caller.clone(), start_price)
 				.expect("Offer not high enough for configuration.");
 
 			Broker::<T>::do_assign(region, None, task, Final)
@@ -1305,12 +1318,13 @@ mod benches {
 		Broker::<T>::process_revenue();
 		status.last_committed_timeslice = config.region_length;
 
-		let block = RCBlockNumberProviderOf::<T::Coretime>::get_block();
+		let block = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
 		let reserved_cores = <Broker<T> as Market<T>>::CoreCount::reserved_core_count();
 		let (new_prices, new_sale) =
 			market::rotate_sale::<T>(&sale, &config, &status, reserved_cores, block);
 		let start_price = market::sell_price::<T>(block, &new_sale);
-		let action = TickAction::SaleRotated { old_sale: sale, new_sale, new_prices, start_price };
+		let action =
+			TickAction::SaleRotated { old_sale: sale.clone(), new_sale, new_prices, start_price };
 
 		let mut meter = WeightMeter::new();
 
@@ -1329,7 +1343,7 @@ mod benches {
 			Event::SaleInitialized {
 				sale_start,
 				leadin_length: 1u32.into(),
-				start_price: Broker::<T>::sale_price(&new_sale, now),
+				start_price: market::sell_price::<T>(now, &new_sale),
 				end_price: new_prices.end_price,
 				region_begin: sale.region_begin + config.region_length,
 				region_end: sale.region_end + config.region_length,
@@ -1438,7 +1452,13 @@ mod benches {
 
 		#[block]
 		{
-			market::sale_rotated::<T, Broker<T>>(sale, &config, &status, block_number, &mut actions);
+			market::sale_rotated::<T, Broker<T>>(
+				sale,
+				&config,
+				&status,
+				block_number,
+				&mut actions,
+			);
 		}
 
 		assert_eq!(actions.len(), 1);
@@ -1464,7 +1484,7 @@ mod benches {
 		}
 
 		assert_eq!(actions.len(), 1);
-		assert!(matches!(actions[0], TickAction::LastTimesliceChanged { .. }));		
+		assert!(matches!(actions[0], TickAction::LastTimesliceChanged { .. }));
 	}
 
 	// Implements a test for each benchmark. Execute with:

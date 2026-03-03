@@ -390,13 +390,16 @@ fn purchase_core<T: Config>(price: BalanceOf<T>, sale: &mut SaleInfoRecordOf<T>)
 	core
 }
 
-fn sell_price<T: Config>(now: RelayBlockNumberOf<T>, sale: &SaleInfoRecordOf<T>) -> BalanceOf<T> {
+pub(crate) fn sell_price<T: Config>(
+	now: RelayBlockNumberOf<T>,
+	sale: &SaleInfoRecordOf<T>,
+) -> BalanceOf<T> {
 	let num = now.saturating_sub(sale.sale_start).min(sale.leadin_length).saturated_into();
 	let through = FixedU64::from_rational(num, sale.leadin_length.saturated_into());
 	leadin_factor_at(through).saturating_mul_int(sale.end_price)
 }
 
-fn leadin_factor_at(when: FixedU64) -> FixedU64 {
+pub(crate) fn leadin_factor_at(when: FixedU64) -> FixedU64 {
 	if when <= FixedU64::from_rational(1, 2) {
 		FixedU64::from(100).saturating_sub(when.saturating_mul(180.into()))
 	} else {
@@ -444,7 +447,7 @@ fn adapt_prices<T: Config>(old_sale: &SaleInfoRecordOf<T>) -> AdaptedPrices<Bala
 	new_prices
 }
 
-fn rotate_sale<T: Config>(
+pub(crate) fn rotate_sale<T: Config>(
 	old_sale: &SaleInfoRecordOf<T>,
 	config: &ConfigRecordOf<T>,
 	status: &StatusRecord,
