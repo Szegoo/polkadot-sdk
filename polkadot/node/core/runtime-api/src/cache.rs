@@ -47,7 +47,7 @@ pub(crate) struct RequestResultCache {
 	check_validation_outputs: LruMap<(Hash, ParaId, CandidateCommitments), bool>,
 	session_index_for_child: LruMap<Hash, SessionIndex>,
 	validation_code: LruMap<(Hash, ParaId, OccupiedCoreAssumption), Option<ValidationCode>>,
-	validation_code_by_hash: LruMap<ValidationCodeHash, Option<ValidationCode>>,
+	validation_code_by_hash: LruMap<ValidationCodeHash, ValidationCode>,
 	candidate_pending_availability: LruMap<(Hash, ParaId), Option<CommittedCandidateReceipt>>,
 	candidates_pending_availability: LruMap<(Hash, ParaId), Vec<CommittedCandidateReceipt>>,
 	candidate_events: LruMap<Hash, Vec<CandidateEvent>>,
@@ -79,6 +79,7 @@ pub(crate) struct RequestResultCache {
 	scheduling_lookahead: LruMap<SessionIndex, u32>,
 	validation_code_bomb_limits: LruMap<SessionIndex, u32>,
 	para_ids: LruMap<SessionIndex, Vec<ParaId>>,
+	max_relay_parent_session_age: LruMap<SessionIndex, u32>,
 }
 
 impl Default for RequestResultCache {
@@ -121,6 +122,7 @@ impl Default for RequestResultCache {
 			scheduling_lookahead: LruMap::new(ByLength::new(DEFAULT_CACHE_CAP)),
 			validation_code_bomb_limits: LruMap::new(ByLength::new(DEFAULT_CACHE_CAP)),
 			para_ids: LruMap::new(ByLength::new(DEFAULT_CACHE_CAP)),
+			max_relay_parent_session_age: LruMap::new(ByLength::new(DEFAULT_CACHE_CAP)),
 		}
 	}
 }
@@ -244,12 +246,15 @@ impl RequestResultCache {
 		self.validation_code.insert(key, value);
 	}
 
-	// the actual key is `ValidationCodeHash` (`Hash` is ignored),
-	// but we keep the interface that way to keep the macro simple
+	// The actual key is `ValidationCodeHash` (`Hash` is ignored).
+	// Only `Some` values are cached: validation code may not exist at query time but
+	// could be added later (e.g. via `force_set_current_code`). Caching `None` would
+	// produce stale results that prevent approval voting from fetching code that is
+	// already on-chain, stalling finality.
 	pub(crate) fn validation_code_by_hash(
 		&mut self,
 		key: (Hash, ValidationCodeHash),
-	) -> Option<&Option<ValidationCode>> {
+	) -> Option<&ValidationCode> {
 		self.validation_code_by_hash.get(&key.1).map(|v| &*v)
 	}
 
@@ -258,7 +263,9 @@ impl RequestResultCache {
 		key: ValidationCodeHash,
 		value: Option<ValidationCode>,
 	) {
-		self.validation_code_by_hash.insert(key, value);
+		if let Some(code) = value {
+			self.validation_code_by_hash.insert(key, code);
+		}
 	}
 
 	pub(crate) fn candidate_pending_availability(
@@ -627,6 +634,22 @@ impl RequestResultCache {
 	pub(crate) fn cache_para_ids(&mut self, session_index: SessionIndex, value: Vec<ParaId>) {
 		self.para_ids.insert(session_index, value);
 	}
+
+	pub(crate) fn max_relay_parent_session_age(
+		&mut self,
+		session_index: SessionIndex,
+	) -> Option<u32> {
+		self.max_relay_parent_session_age.get(&session_index).copied()
+	}
+
+	pub(crate) fn cache_max_relay_parent_session_age(
+		&mut self,
+		session_index: SessionIndex,
+		max_relay_parent_session_age: u32,
+	) {
+		self.max_relay_parent_session_age
+			.insert(session_index, max_relay_parent_session_age);
+	}
 }
 
 pub(crate) enum RequestResult {
@@ -681,5 +704,28 @@ pub(crate) enum RequestResult {
 	SchedulingLookahead(SessionIndex, u32),
 	ValidationCodeBombLimit(SessionIndex, u32),
 	ParaIds(SessionIndex, Vec<ParaId>),
+	MaxRelayParentSessionAge(SessionIndex, u32),
 	UnappliedSlashesV2(Hash, Vec<(SessionIndex, CandidateHash, slashing::PendingSlashes)>),
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn validation_code_by_hash_does_not_cache_none() {
+		let mut cache = RequestResultCache::default();
+		let relay_parent: Hash = [1u8; 32].into();
+		let code = ValidationCode(vec![1, 2, 3]);
+		let code_hash = code.hash();
+
+		cache.cache_validation_code_by_hash(code_hash, None);
+		assert!(
+			cache.validation_code_by_hash((relay_parent, code_hash)).is_none(),
+			"None results must not be cached",
+		);
+
+		cache.cache_validation_code_by_hash(code_hash, Some(code.clone()));
+		assert_eq!(cache.validation_code_by_hash((relay_parent, code_hash)), Some(&code),);
+	}
 }

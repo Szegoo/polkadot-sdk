@@ -197,7 +197,7 @@ pub trait RuntimeApiSubsystemClient {
 	async fn on_chain_votes(&self, at: Hash)
 		-> Result<Option<ScrapedOnChainVotes<Hash>>, ApiError>;
 
-	/***** Added in v2 **** */
+	/// *** Added in v2 ****
 
 	/// Get the session info for the given session, if stored.
 	///
@@ -234,7 +234,7 @@ pub trait RuntimeApiSubsystemClient {
 		assumption: OccupiedCoreAssumption,
 	) -> Result<Option<ValidationCodeHash>, ApiError>;
 
-	/***** Added in v3 **** */
+	/// *** Added in v3 ****
 
 	/// Returns all onchain disputes.
 	async fn disputes(
@@ -364,6 +364,10 @@ pub trait RuntimeApiSubsystemClient {
 		&self,
 		at: Hash,
 	) -> Result<Vec<(SessionIndex, CandidateHash, slashing::PendingSlashes)>, ApiError>;
+
+	// == v16 ==
+	/// Fetch the maximum relay parent session age allowed for parachain blocks.
+	async fn max_relay_parent_session_age(&self, at: Hash) -> Result<u32, ApiError>;
 }
 
 /// Default implementation of [`RuntimeApiSubsystemClient`] using the client.
@@ -667,6 +671,10 @@ where
 
 	async fn para_ids(&self, at: Hash) -> Result<Vec<Id>, ApiError> {
 		self.client.runtime_api().para_ids(at)
+	}
+
+	async fn max_relay_parent_session_age(&self, at: Hash) -> Result<u32, ApiError> {
+		self.client.runtime_api().max_relay_parent_session_age(at)
 	}
 }
 
