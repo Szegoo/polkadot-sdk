@@ -51,8 +51,8 @@ fn assert_has_event<T: Config>(generic_event: <T as Config>::RuntimeEvent) {
 fn new_config_record<T: Config>() -> ConfigRecordOf<T> {
 	ConfigRecord {
 		advance_notice: 2u32.into(),
-		interlude_length: 1u32.into(),
-		leadin_length: 1u32.into(),
+		market_period_length: 1u32.into(),
+		renewal_period_length: 1u32.into(),
 		ideal_bulk_proportion: Default::default(),
 		limit_cores_offered: None,
 		region_length: 3,
@@ -286,12 +286,11 @@ mod benches {
 		_(origin as T::RuntimeOrigin, initial_price, extra_cores.try_into().unwrap());
 
 		assert!(SaleInfo::<T>::get().is_some());
-		let sale_start = RCBlockNumberProviderOf::<T::Coretime>::current_block_number() +
-			config.interlude_length;
+		let sale_start = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
 		assert_last_event::<T>(
 			Event::SaleInitialized {
 				sale_start,
-				leadin_length: 1u32.into(),
+				market_period_length: 1u32.into(),
 				start_price,
 				end_price,
 				region_begin: latest_region_begin + config.region_length,
@@ -1339,12 +1338,12 @@ mod benches {
 		let new_prices = T::PriceAdapter::adapt_price(SalePerformance::from_sale(&sale));
 		let new_sale = SaleInfo::<T>::get().expect("Sale has started.");
 		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
-		let sale_start = config.interlude_length.saturating_add(rotate_block.into());
+		let sale_start = rotate_block.into();
 
 		assert_has_event::<T>(
 			Event::SaleInitialized {
 				sale_start,
-				leadin_length: 1u32.into(),
+				market_period_length: 1u32.into(),
 				start_price,
 				end_price: new_prices.end_price,
 				region_begin: sale.region_begin + config.region_length,

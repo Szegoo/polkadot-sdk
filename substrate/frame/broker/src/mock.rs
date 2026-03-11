@@ -271,8 +271,8 @@ pub fn attribute<T: codec::Decode>(nft: RegionId, attribute: impl codec::Encode)
 pub fn new_config() -> ConfigRecordOf<Test> {
 	ConfigRecord {
 		advance_notice: 2,
-		interlude_length: 1,
-		leadin_length: 1,
+		market_period_length: 1,
+		renewal_period_length: 1,
 		ideal_bulk_proportion: Default::default(),
 		limit_cores_offered: None,
 		region_length: 3,
@@ -301,13 +301,13 @@ impl TestExt {
 		self
 	}
 
-	pub fn interlude_length(mut self, interlude_length: u64) -> Self {
-		self.0.interlude_length = interlude_length;
+	pub fn market_period_length(mut self, market_period_length: u64) -> Self {
+		self.0.market_period_length = market_period_length;
 		self
 	}
 
-	pub fn leadin_length(mut self, leadin_length: u64) -> Self {
-		self.0.leadin_length = leadin_length;
+	pub fn renewal_period_length(mut self, renewal_period_length: u64) -> Self {
+		self.0.renewal_period_length = renewal_period_length;
 		self
 	}
 

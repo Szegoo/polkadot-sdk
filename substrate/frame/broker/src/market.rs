@@ -209,7 +209,7 @@ impl<T: Config> Market<T> for Pallet<T> {
 		// Imaginary old sale for bootstrapping the first actual sale:
 		let old_sale = SaleInfoRecord {
 			sale_start: block_number,
-			leadin_length: Zero::zero(),
+			market_period_length: Zero::zero(),
 			end_price,
 			sellout_price: None,
 			region_begin: commit_timeslice,
@@ -375,8 +375,8 @@ pub(crate) fn sell_price<T: Config>(
 	now: RelayBlockNumberOf<T>,
 	sale: &SaleInfoRecordOf<T>,
 ) -> BalanceOf<T> {
-	let num = now.saturating_sub(sale.sale_start).min(sale.leadin_length).saturated_into();
-	let through = FixedU64::from_rational(num, sale.leadin_length.saturated_into());
+	let num = now.saturating_sub(sale.sale_start).min(sale.market_period_length).saturated_into();
+	let through = FixedU64::from_rational(num, sale.market_period_length.saturated_into());
 	leadin_factor_at(through).saturating_mul_int(sale.end_price)
 }
 
@@ -440,8 +440,8 @@ pub(crate) fn rotate_sale<T: Config>(
 	let max_possible_sales = status.core_count.saturating_sub(reserved_cores);
 	let limit_cores_offered = config.limit_cores_offered.unwrap_or(CoreIndex::max_value());
 	let cores_offered = limit_cores_offered.min(max_possible_sales);
-	let sale_start = now.saturating_add(config.interlude_length);
-	let leadin_length = config.leadin_length;
+	let sale_start = now;
+	let market_period_length = config.market_period_length;
 	let ideal_cores_sold = (config.ideal_bulk_proportion * cores_offered as u32) as u16;
 	let sellout_price = if cores_offered > 0 {
 		// No core sold -> price was too high -> we have to adjust downwards.
@@ -455,7 +455,7 @@ pub(crate) fn rotate_sale<T: Config>(
 
 	let new_sale = SaleInfoRecord {
 		sale_start,
-		leadin_length,
+		market_period_length,
 		end_price: new_prices.end_price,
 		sellout_price,
 		region_begin,

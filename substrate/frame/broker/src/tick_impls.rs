@@ -290,7 +290,7 @@ impl<T: Config> Pallet<T> {
 
 		Self::deposit_event(Event::SaleInitialized {
 			sale_start: new_sale.sale_start,
-			leadin_length: new_sale.leadin_length,
+			market_period_length: new_sale.market_period_length,
 			start_price,
 			end_price: new_prices.end_price,
 			region_begin: new_sale.region_begin,

@@ -296,8 +296,8 @@ pub mod v4 {
 					);
 
 				let updated_config_record = ConfigRecord {
-					interlude_length: updated_interlude_length,
-					leadin_length: updated_leadin_length,
+					market_period_length: updated_leadin_length,
+					renewal_period_length: updated_interlude_length,
 					advance_notice: config_record.advance_notice,
 					region_length: config_record.region_length,
 					ideal_bulk_proportion: config_record.ideal_bulk_proportion,
@@ -319,7 +319,7 @@ pub mod v4 {
 
 				let updated_sale_info = SaleInfoRecord {
 					sale_start: updated_sale_start,
-					leadin_length: updated_leadin_length,
+					market_period_length: updated_leadin_length,
 					end_price: sale_info.price,
 					region_begin: sale_info.region_begin,
 					region_end: sale_info.region_end,
@@ -349,17 +349,17 @@ pub mod v4 {
 				ensure!(
 					Self::verify_updated_block_length(
 						old_configuration_leadin_length,
-						config_record.leadin_length
+						config_record.market_period_length
 					),
-					"must migrate configuration leadin_length"
+					"must migrate configuration market_period_length"
 				);
 
 				ensure!(
 					Self::verify_updated_block_length(
 						old_interlude_length,
-						config_record.interlude_length
+						config_record.renewal_period_length
 					),
-					"must migrate configuration interlude_length"
+					"must migrate configuration renewal_period_length"
 				);
 			}
 
@@ -372,9 +372,9 @@ pub mod v4 {
 				ensure!(
 					Self::verify_updated_block_length(
 						old_sale_info_leadin_length,
-						sale_info.leadin_length
+						sale_info.market_period_length
 					),
-					"must migrate sale info leadin_length"
+					"must migrate sale info market_period_length"
 				);
 			}
 
