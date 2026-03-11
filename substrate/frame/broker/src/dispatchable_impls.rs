@@ -115,31 +115,19 @@ impl<T: Config> Pallet<T> {
 		Self::do_request_core_count(core_count)?;
 
 		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
-		let events = <Self as Market<T>>::start_sales(now, end_price, core_count)?;
+		let sales_started = <Self as Market<T>>::start_sales(now, end_price, core_count)?;
 
 		Self::deposit_event(Event::<T>::SalesStarted { price: end_price, core_count });
 
-		for event in events {
-			match event {
-				StartSalesEvent::SalesStarted {
-					imaginary_old_sale,
-					new_sale,
-					new_prices,
-					start_price,
-				} => {
-					// TODO: Don't read status here.
-					let status = Status::<T>::get().ok_or(Error::<T>::Uninitialized)?;
-
-					Self::rotate_sale(
-						&imaginary_old_sale,
-						&new_sale,
-						new_prices,
-						start_price,
-						&status,
-					);
-				},
-			}
-		}
+		// TODO: Don't read status here.
+		let status = Status::<T>::get().ok_or(Error::<T>::Uninitialized)?;
+		Self::rotate_sale(
+			&sales_started.imaginary_old_sale,
+			&sales_started.new_sale,
+			sales_started.new_prices,
+			sales_started.start_price,
+			&status,
+		);
 
 		Ok(())
 	}

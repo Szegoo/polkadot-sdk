@@ -48,13 +48,12 @@ pub trait Market<T: Config> {
 		block_number: RelayBlockNumberOf<T>,
 		end_price: BalanceOf<T>,
 		core_count: CoreIndex,
-	) -> Result<Vec<StartSalesEvent<T>>, Self::Error>;
+	) -> Result<SalesStarted<T>, Self::Error>;
 
 	/// Place an order for one bulk coretime region purchase.
 	///
 	/// This method may or may not create a bid, according to the market rules.
 	///
-	/// - `since_timeslice_start` - amount of blocks passed since the current timeslice start
 	/// - `price_limit` - maximum price which the buyer is willing to pay
 	fn place_order(
 		block_number: RelayBlockNumberOf<T>,
@@ -65,8 +64,6 @@ pub trait Market<T: Config> {
 	/// Place an order for bulk coretime renewal.
 	///
 	/// This method may or may not create a bid, according to the market rules.
-	///
-	/// - `since_timeslice_start` - amount of blocks passed since the current timeslice start
 	fn place_renewal_order(
 		block_number: RelayBlockNumberOf<T>,
 		who: &T::AccountId,
@@ -107,7 +104,7 @@ pub enum RenewalOrderResult<T: Config, BidId> {
 	Sold {
 		price: BalanceOf<T>,
 		next_renewal_price: BalanceOf<T>,
-		/// Timeslice where the newly renewed coretime will be active.
+		/// Timeslice where the newly renewed coretime region will be active.
 		effective_from: Timeslice,
 		effective_to: Timeslice,
 		core: CoreIndex,
@@ -158,15 +155,13 @@ pub enum TickAction<T: Config, BidId> {
 	},
 }
 
-pub enum StartSalesEvent<T: Config> {
-	SalesStarted {
-		imaginary_old_sale: SaleInfoRecordOf<T>,
-		new_sale: SaleInfoRecordOf<T>,
-		new_prices: AdaptedPrices<BalanceOf<T>>,
-		// TODO: Deprecate it as it doesn't fit into the general market impl but used when emitting
-		// an event.
-		start_price: BalanceOf<T>,
-	},
+pub struct SalesStarted<T: Config> {
+	pub imaginary_old_sale: SaleInfoRecordOf<T>,
+	pub new_sale: SaleInfoRecordOf<T>,
+	pub new_prices: AdaptedPrices<BalanceOf<T>>,
+	// TODO: Deprecate it as it doesn't fit into the general market impl but used when emitting
+	// an event.
+	pub start_price: BalanceOf<T>,
 }
 
 pub enum MarketError {
@@ -203,7 +198,7 @@ impl<T: Config> Market<T> for Pallet<T> {
 		block_number: RelayBlockNumberOf<T>,
 		end_price: BalanceOf<T>,
 		core_count: u16,
-	) -> Result<Vec<StartSalesEvent<T>>, Self::Error> {
+	) -> Result<SalesStarted<T>, Self::Error> {
 		let config = Configuration::<T>::get().ok_or(MarketError::Uninitialized)?;
 
 		let commit_timeslice = latest_timeslice_ready_to_commit::<T>(block_number, &config);
@@ -237,14 +232,7 @@ impl<T: Config> Market<T> for Pallet<T> {
 
 		let start_price = sell_price::<T>(block_number, &new_sale);
 
-		let event = StartSalesEvent::SalesStarted {
-			imaginary_old_sale: old_sale,
-			new_sale,
-			new_prices,
-			start_price,
-		};
-
-		Ok(vec![event])
+		Ok(SalesStarted { imaginary_old_sale: old_sale, new_sale, new_prices, start_price })
 	}
 
 	fn place_order(
@@ -277,8 +265,6 @@ impl<T: Config> Market<T> for Pallet<T> {
 		})
 	}
 
-	// TODO: If we return Sold also return optional argument showing whether we should create a new
-	// potential renewal or not.
 	fn place_renewal_order(
 		block_number: RelayBlockNumberOf<T>,
 		_who: &AccountIdFor<T>,
