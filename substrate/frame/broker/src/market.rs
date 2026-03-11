@@ -24,8 +24,8 @@ use sp_runtime::{traits::Zero, DispatchError, FixedU64, SaturatedConversion, Sat
 
 use crate::{
 	utility_impls::CoreCountProviderImpl, weights::WeightInfo, AdaptPrice, AdaptedPrices,
-	BalanceOf, BidIdOf, Config, ConfigRecordOf, Configuration, CoreIndex, Pallet,
-	PotentialRenewalId, RelayBlockNumberOf, SaleInfo, SaleInfoRecord, SaleInfoRecordOf,
+	BalanceOf, BidIdOf, Config, ConfigRecordOf, Configuration, CoreIndex, CoreMask, Pallet,
+	PotentialRenewalId, RegionId, RelayBlockNumberOf, SaleInfo, SaleInfoRecord, SaleInfoRecordOf,
 	SalePerformance, Status, StatusRecord, Timeslice,
 };
 
@@ -93,7 +93,7 @@ pub trait CoreCountProvider<T: Config> {
 
 pub enum OrderResult<T: Config, BidId> {
 	BidPlaced { id: BidId, bid_price: BalanceOf<T> },
-	Sold { price: BalanceOf<T>, region_begin: Timeslice, region_end: Timeslice, core: CoreIndex },
+	Sold { price: BalanceOf<T>, region_id: RegionId, region_end: Timeslice },
 }
 
 pub enum RenewalOrderResult<T: Config, BidId> {
@@ -104,10 +104,8 @@ pub enum RenewalOrderResult<T: Config, BidId> {
 	Sold {
 		price: BalanceOf<T>,
 		next_renewal_price: BalanceOf<T>,
-		/// Timeslice where the newly renewed coretime region will be active.
-		effective_from: Timeslice,
+		region_id: RegionId,
 		effective_to: Timeslice,
-		core: CoreIndex,
 	},
 }
 
@@ -122,9 +120,8 @@ pub enum TickAction<T: Config, BidId> {
 		owner: T::AccountId,
 		/// How much was paid for this region in total.
 		paid: BalanceOf<T>,
-		region_begin: Timeslice,
+		region_id: RegionId,
 		region_end: Timeslice,
-		core: CoreIndex,
 	},
 	RenewRegion {
 		owner: T::AccountId,
@@ -257,12 +254,9 @@ impl<T: Config> Market<T> for Pallet<T> {
 		let core = purchase_core::<T>(sell_price, &mut sale);
 		SaleInfo::<T>::put(&sale);
 
-		Ok(OrderResult::Sold {
-			price: sell_price,
-			region_begin: sale.region_begin,
-			region_end: sale.region_end,
-			core,
-		})
+		let region_id = RegionId { begin: sale.region_begin, core, mask: CoreMask::complete() };
+
+		Ok(OrderResult::Sold { price: sell_price, region_id, region_end: sale.region_end })
 	}
 
 	fn place_renewal_order(
@@ -286,12 +280,13 @@ impl<T: Config> Market<T> for Pallet<T> {
 		let core = purchase_core::<T>(recorded_price, &mut sale);
 		SaleInfo::<T>::put(&sale);
 
+		let region_id = RegionId { core, begin: sale.region_begin, mask: CoreMask::complete() };
+
 		return Ok(RenewalOrderResult::Sold {
 			price: recorded_price,
 			next_renewal_price,
-			effective_from: sale.region_begin,
+			region_id,
 			effective_to: sale.region_end,
-			core,
 		})
 	}
 

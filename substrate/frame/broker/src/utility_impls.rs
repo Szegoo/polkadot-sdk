@@ -73,17 +73,13 @@ impl<T: Config> Pallet<T> {
 	}
 
 	pub fn issue(
-		core: CoreIndex,
-		begin: Timeslice,
-		mask: CoreMask,
+		region_id: RegionId,
 		end: Timeslice,
 		owner: Option<T::AccountId>,
 		paid: Option<BalanceOf<T>>,
-	) -> RegionId {
-		let id = RegionId { begin, core, mask };
+	) {
 		let record = RegionRecord { end, owner, paid };
-		Regions::<T>::insert(&id, &record);
-		id
+		Regions::<T>::insert(&region_id, &record);
 	}
 
 	pub(crate) fn utilize(

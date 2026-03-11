@@ -143,21 +143,14 @@ impl<T: Config> Pallet<T> {
 
 				Self::do_renew(owner, renewal_id.core).defensive_ok();
 			},
-			TickAction::SellRegion { owner, paid, region_begin, region_end, core } => {
+			TickAction::SellRegion { owner, paid, region_id, region_end } => {
 				meter.consume(T::WeightInfo::process_tick_action_sell_region());
 
-				let id = Self::issue(
-					core,
-					region_begin,
-					CoreMask::complete(),
-					region_end,
-					Some(owner.clone()),
-					Some(paid),
-				);
-				let duration = region_end.saturating_sub(region_begin);
+				Self::issue(region_id, region_end, Some(owner.clone()), Some(paid));
+				let duration = region_end.saturating_sub(region_id.begin);
 				Self::deposit_event(Event::Purchased {
 					who: owner,
-					region_id: id,
+					region_id,
 					price: paid,
 					duration,
 				});

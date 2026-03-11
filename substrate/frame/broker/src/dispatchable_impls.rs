@@ -143,20 +143,13 @@ impl<T: Config> Pallet<T> {
 
 				Self::deposit_event(Event::BidPlaced { bid_id: id, price: bid_price });
 			},
-			OrderResult::Sold { price, region_begin, region_end, core } => {
+			OrderResult::Sold { price, region_id, region_end } => {
 				Self::charge(&who, price)?;
 
-				let id = Self::issue(
-					core,
-					region_begin,
-					CoreMask::complete(),
-					region_end,
-					Some(who.clone()),
-					Some(price),
-				);
-				let duration = region_end.saturating_sub(region_begin);
+				Self::issue(region_id, region_end, Some(who.clone()), Some(price));
+				let duration = region_end.saturating_sub(region_id.begin);
 
-				Self::deposit_event(Event::Purchased { who, region_id: id, price, duration });
+				Self::deposit_event(Event::Purchased { who, region_id, price, duration });
 			},
 		};
 
@@ -187,24 +180,18 @@ impl<T: Config> Pallet<T> {
 
 				Ok(DoRenewResult::BidPlaced { id })
 			},
-			RenewalOrderResult::Sold {
-				price,
-				next_renewal_price,
-				effective_from,
-				effective_to,
-				core: new_core,
-			} => {
+			RenewalOrderResult::Sold { price, next_renewal_price, region_id, effective_to } => {
 				Self::charge(&who, price)?;
 
-				Workplan::<T>::insert((effective_from, new_core), &workload);
+				Workplan::<T>::insert((region_id.begin, region_id.core), &workload);
 
 				Self::deposit_event(Event::Renewed {
 					who,
 					old_core: core,
-					core: new_core,
+					core: region_id.core,
 					price,
-					begin: effective_from,
-					duration: effective_to.saturating_sub(effective_from),
+					begin: region_id.begin,
+					duration: effective_to.saturating_sub(region_id.begin),
 					workload: workload.clone(),
 				});
 
@@ -214,20 +201,20 @@ impl<T: Config> Pallet<T> {
 				};
 				PotentialRenewals::<T>::remove(renewal_id);
 				PotentialRenewals::<T>::insert(
-					PotentialRenewalId { core: new_core, when: effective_to },
+					PotentialRenewalId { core: region_id.core, when: effective_to },
 					&new_record,
 				);
 				if let Some(workload) = new_record.completion.drain_complete() {
 					log::debug!("Recording renewable price for next run: {:?}", price);
 					Self::deposit_event(Event::Renewable {
-						core: new_core,
+						core: region_id.core,
 						price,
 						begin: effective_to,
 						workload,
 					});
 				}
 
-				Ok(DoRenewResult::Renewed { new_core })
+				Ok(DoRenewResult::Renewed { new_core: region_id.core })
 			},
 		}
 	}
