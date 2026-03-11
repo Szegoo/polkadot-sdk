@@ -2926,7 +2926,7 @@ fn force_transfer_works() {
 		const OLD_OWNER: u64 = 1;
 		const NEW_OWNER: u64 = 222;
 
-		let region_id = Broker::do_purchase(OLD_OWNER, u64::max_value()).unwrap();
+		let region_id = do_purchase_and_get_region_id(OLD_OWNER, u64::max_value()).unwrap();
 		let region = Regions::<Test>::get(region_id).unwrap();
 
 		assert_noop!(
@@ -2982,7 +2982,7 @@ fn force_transfer_can_transfer_burned_region() {
 		const OLD_OWNER: u64 = 1;
 		const NEW_OWNER: u64 = 222;
 
-		let region_id = Broker::do_purchase(OLD_OWNER, u64::max_value()).unwrap();
+		let region_id = do_purchase_and_get_region_id(OLD_OWNER, u64::max_value()).unwrap();
 
 		assert_ok!(<Broker as Mutate<u64>>::burn(&region_id.into(), None));
 
@@ -3019,7 +3019,7 @@ fn force_transfer_can_transfer_provisionally_assigned_region() {
 		const OLD_OWNER: u64 = 1;
 		const NEW_OWNER: u64 = 222;
 
-		let region_id = Broker::do_purchase(OLD_OWNER, u64::max_value()).unwrap();
+		let region_id = do_purchase_and_get_region_id(OLD_OWNER, u64::max_value()).unwrap();
 
 		assert_ok!(Broker::assign(RuntimeOrigin::signed(OLD_OWNER), region_id, 1001, Provisional));
 
