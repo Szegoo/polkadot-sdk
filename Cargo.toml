@@ -344,6 +344,7 @@ members = [
 	"substrate/frame/collective",
 	"substrate/frame/contracts",
 	"substrate/frame/contracts/fixtures",
+	"substrate/frame/coretime-market",
 	"substrate/frame/contracts/mock-network",
 	"substrate/frame/contracts/proc-macro",
 	"substrate/frame/contracts/uapi",
@@ -968,6 +969,7 @@ pallet-bridge-messages = { path = "bridges/modules/messages", default-features =
 pallet-bridge-parachains = { path = "bridges/modules/parachains", default-features = false }
 pallet-bridge-relayers = { path = "bridges/modules/relayers", default-features = false }
 pallet-broker = { path = "substrate/frame/broker", default-features = false }
+pallet-coretime-market = { path = "substrate/frame/coretime-market", default-features = false }
 pallet-child-bounties = { path = "substrate/frame/child-bounties", default-features = false }
 pallet-collator-selection = { path = "cumulus/pallets/collator-selection", default-features = false }
 pallet-collective = { path = "substrate/frame/collective", default-features = false }
