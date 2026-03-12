@@ -18,10 +18,15 @@
 use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
 use core::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Not};
 use scale_info::TypeInfo;
-use Debug;
 
 /// The number of bits in the `CoreMask`.
 pub const CORE_MASK_BITS: usize = 80;
+
+/// Counter for the total number of set bits over every core's `CoreMask`.
+pub type CoreMaskBitCount = u32;
+
+/// The same as `CoreMaskBitCount` but signed.
+pub type SignedCoreMaskBitCount = i32;
 
 // TODO: Use BitArr instead; for this, we'll need to ensure Codec is impl'ed for `BitArr`.
 #[derive(
@@ -38,6 +43,7 @@ pub const CORE_MASK_BITS: usize = 80;
 	MaxEncodedLen,
 )]
 pub struct CoreMask([u8; 10]);
+
 impl CoreMask {
 	pub fn void() -> Self {
 		Self([0u8; 10])
@@ -77,6 +83,7 @@ impl CoreMask {
 		Self(v)
 	}
 }
+
 impl From<u128> for CoreMask {
 	fn from(x: u128) -> Self {
 		let mut v = [0u8; 10];

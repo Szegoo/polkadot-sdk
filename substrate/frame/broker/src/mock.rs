@@ -44,6 +44,7 @@ frame_support::construct_runtime!(
 	pub enum Test
 	{
 		System: frame_system,
+		CoretimeMarket: pallet_coretime_market,
 		Broker: crate,
 	}
 );
@@ -201,6 +202,23 @@ impl MaybeConvert<TaskId, u64> for SovereignAccountOf {
 	}
 }
 
+pub struct MarketCoreCountProvider;
+impl CoreCountProvider for MarketCoreCountProvider {
+	fn reserved_core_count() -> CoreIndex {
+		Reservations::<Test>::decode_len().unwrap_or_default() as CoreIndex +
+			Leases::<Test>::decode_len().unwrap_or_default() as CoreIndex
+	}
+}
+
+impl pallet_coretime_market::Config for Test {
+	type Balance = BalanceOf<Self>;
+	type RelayBlockNumber = RelayBlockNumberOf<Self>;
+	type WeightInfo = ();
+	type PriceAdapter = CenterTargetPrice<BalanceOf<Self>>;
+	type CoreCountProvider = MarketCoreCountProvider;
+	type TimeslicePeriod = ConstU64<2>;
+}
+
 impl crate::Config for Test {
 	type RuntimeEvent = RuntimeEvent;
 	type Currency = ItemOf<TestFungibles<(), u64, (), ConstU64<0>, ()>, (), u64>;
@@ -215,7 +233,7 @@ impl crate::Config for Test {
 	type AdminOrigin = EnsureOneOrRoot;
 	type SovereignAccountOf = SovereignAccountOf;
 	type MaxAutoRenewals = ConstU32<3>;
-	type PriceAdapter = CenterTargetPrice<BalanceOf<Self>>;
+	type Market = CoretimeMarket;
 	type MinimumCreditPurchase = MinimumCreditPurchase;
 }
 
@@ -228,7 +246,7 @@ pub fn advance_to(b: u64) {
 }
 
 pub fn advance_sale_period() {
-	let sale = SaleInfo::<Test>::get().unwrap();
+	let sale = Broker::market_sale_info().unwrap();
 
 	let target_block_number =
 		sale.region_begin as u64 * <<Test as crate::Config>::TimeslicePeriod as Get<u64>>::get();

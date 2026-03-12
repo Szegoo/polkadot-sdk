@@ -28,6 +28,30 @@ use sp_arithmetic::traits::{SaturatedConversion, Saturating};
 use sp_runtime::traits::{AccountIdConversion, BlockNumberProvider};
 
 impl<T: Config> Pallet<T> {
+	pub fn market_configuration() -> Option<ConfigRecordOf<T>> {
+		T::Market::configuration()
+	}
+
+	pub fn set_market_configuration(config: ConfigRecordOf<T>) {
+		T::Market::set_configuration(config);
+	}
+
+	pub fn market_status() -> Option<StatusRecord> {
+		T::Market::status()
+	}
+
+	pub fn set_market_status(status: StatusRecord) {
+		T::Market::set_status(status);
+	}
+
+	pub fn market_sale_info() -> Option<SaleInfoRecordOf<T>> {
+		T::Market::sale_info()
+	}
+
+	pub fn set_market_sale_info(sale_info: SaleInfoRecordOf<T>) {
+		T::Market::set_sale_info(sale_info);
+	}
+
 	pub fn current_timeslice() -> Timeslice {
 		let latest = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
 		let timeslice_period = T::TimeslicePeriod::get();
@@ -63,12 +87,12 @@ impl<T: Config> Pallet<T> {
 	}
 
 	pub(crate) fn lock_funds(who: &T::AccountId, amount: BalanceOf<T>) -> DispatchResult {
-		T::Currency::withdraw(&who, amount, Exact, Expendable, Polite)?;
+		let _ = T::Currency::withdraw(&who, amount, Exact, Expendable, Polite)?;
 		Ok(())
 	}
 
 	pub(crate) fn refund(who: &T::AccountId, amount: BalanceOf<T>) -> DispatchResult {
-		T::Currency::deposit(&who, amount, Exact)?;
+		let _ = T::Currency::deposit(&who, amount, Exact)?;
 		Ok(())
 	}
 
@@ -87,7 +111,7 @@ impl<T: Config> Pallet<T> {
 		maybe_check_owner: Option<T::AccountId>,
 		finality: Finality,
 	) -> Result<Option<(RegionId, RegionRecordOf<T>)>, Error<T>> {
-		let status = Status::<T>::get().ok_or(Error::<T>::Uninitialized)?;
+		let status = Self::market_status().ok_or(Error::<T>::Uninitialized)?;
 		let region = Regions::<T>::get(&region_id).ok_or(Error::<T>::UnknownRegion)?;
 
 		if let Some(check_owner) = maybe_check_owner {
@@ -148,14 +172,5 @@ impl<T: Config> Pallet<T> {
 
 			Self::deposit_event(Event::<T>::RegionUnpooled { region_id, when: unpooled_at });
 		};
-	}
-}
-
-pub struct CoreCountProviderImpl<T: Config>(PhantomData<T>);
-
-impl<T: Config> CoreCountProvider for CoreCountProviderImpl<T> {
-	fn reserved_core_count() -> CoreIndex {
-		Reservations::<T>::decode_len().unwrap_or_default() as CoreIndex +
-			Leases::<T>::decode_len().unwrap_or_default() as CoreIndex
 	}
 }

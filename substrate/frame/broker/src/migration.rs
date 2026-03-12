@@ -305,7 +305,7 @@ pub mod v4 {
 					renewal_bump: config_record.renewal_bump,
 					contribution_timeout: config_record.contribution_timeout,
 				};
-				Configuration::<T>::put(updated_config_record);
+				T::Market::set_configuration(updated_config_record);
 			}
 			weight.saturating_accrue(T::DbWeight::get().reads_writes(1, 1));
 
@@ -329,7 +329,7 @@ pub mod v4 {
 					sellout_price: sale_info.sellout_price,
 					cores_sold: sale_info.cores_sold,
 				};
-				SaleInfo::<T>::put(updated_sale_info);
+				T::Market::set_sale_info(updated_sale_info);
 			}
 
 			weight.saturating_add(T::DbWeight::get().reads_writes(1, 2))
@@ -345,7 +345,7 @@ pub mod v4 {
 			): (BlockNumberFor<T>, BlockNumberFor<T>, BlockNumberFor<T>, BlockNumberFor<T>) =
 				Decode::decode(&mut &state[..]).expect("pre_upgrade provides a valid state; qed");
 
-			if let Some(config_record) = Configuration::<T>::get() {
+			if let Some(config_record) = T::Market::configuration() {
 				ensure!(
 					Self::verify_updated_block_length(
 						old_configuration_leadin_length,
@@ -363,7 +363,7 @@ pub mod v4 {
 				);
 			}
 
-			if let Some(sale_info) = SaleInfo::<T>::get() {
+			if let Some(sale_info) = T::Market::sale_info() {
 				ensure!(
 					Self::verify_updated_block_time(old_sale_start, sale_info.sale_start),
 					"must migrate sale info sale_start"

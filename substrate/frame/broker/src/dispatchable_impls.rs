@@ -28,7 +28,7 @@ use CompletionStatus::{Complete, Partial};
 impl<T: Config> Pallet<T> {
 	pub(crate) fn do_configure(config: ConfigRecordOf<T>) -> DispatchResult {
 		config.validate().map_err(|()| Error::<T>::InvalidConfig)?;
-		Configuration::<T>::put(config);
+		Self::set_market_configuration(config);
 		Ok(())
 	}
 
@@ -63,7 +63,7 @@ impl<T: Config> Pallet<T> {
 
 	pub(crate) fn do_force_reserve(workload: Schedule, core: CoreIndex) -> DispatchResult {
 		// Sales must have started, otherwise reserve is equivalent.
-		let sale = SaleInfo::<T>::get().ok_or(Error::<T>::NoSales)?;
+		let sale = Self::market_sale_info().ok_or(Error::<T>::NoSales)?;
 
 		// Reserve - starts at second sale period boundary from now.
 		Self::do_reserve(workload.clone())?;
@@ -75,7 +75,7 @@ impl<T: Config> Pallet<T> {
 
 		// Assign now until the next sale boundary unless the next timeslice is already the sale
 		// boundary.
-		let status = Status::<T>::get().ok_or(Error::<T>::Uninitialized)?;
+		let status = Self::market_status().ok_or(Error::<T>::Uninitialized)?;
 		let timeslice = status.last_committed_timeslice.saturating_add(1);
 		if timeslice < sale.region_begin {
 			Workplan::<T>::insert((timeslice, core), &workload);
@@ -115,12 +115,13 @@ impl<T: Config> Pallet<T> {
 		Self::do_request_core_count(core_count)?;
 
 		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
-		let sales_started = <Self as Market>::start_sales(now, end_price, core_count)?;
+		let sales_started =
+			T::Market::start_sales(now, end_price, core_count).map_err(Into::into)?;
 
 		Self::deposit_event(Event::<T>::SalesStarted { price: end_price, core_count });
 
 		// TODO: Don't read status here.
-		let status = Status::<T>::get().ok_or(Error::<T>::Uninitialized)?;
+		let status = Self::market_status().ok_or(Error::<T>::Uninitialized)?;
 		Self::rotate_sale(
 			&sales_started.imaginary_old_sale,
 			&sales_started.new_sale,
@@ -137,7 +138,7 @@ impl<T: Config> Pallet<T> {
 		price_limit: BalanceOf<T>,
 	) -> Result<(), DispatchError> {
 		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
-		match Self::place_order(now, &who, price_limit)? {
+		match T::Market::place_order(now, &who, price_limit).map_err(Into::into)? {
 			OrderResult::BidPlaced { id, bid_price } => {
 				Self::lock_funds(&who, bid_price)?;
 
@@ -164,7 +165,7 @@ impl<T: Config> Pallet<T> {
 		core: CoreIndex,
 	) -> Result<DoRenewResult<T>, DispatchError> {
 		// TODO: Try to avoid reading SaleInfo here.
-		let sale = SaleInfo::<T>::get().ok_or(Error::<T>::NoSales)?;
+		let sale = Self::market_sale_info().ok_or(Error::<T>::NoSales)?;
 
 		let renewal_id = PotentialRenewalId { core, when: sale.region_begin };
 		let record = PotentialRenewals::<T>::get(renewal_id).ok_or(Error::<T>::NotAllowed)?;
@@ -172,7 +173,9 @@ impl<T: Config> Pallet<T> {
 			record.completion.drain_complete().ok_or(Error::<T>::IncompleteAssignment)?;
 
 		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
-		match Self::place_renewal_order(now, &who, renewal_id, record.price)? {
+		match T::Market::place_renewal_order(now, &who, renewal_id, record.price)
+			.map_err(Into::into)?
+		{
 			RenewalOrderResult::BidPlaced { id, bid_price } => {
 				Self::lock_funds(&who, bid_price)?;
 
@@ -219,6 +222,18 @@ impl<T: Config> Pallet<T> {
 		}
 	}
 
+	pub(crate) fn do_close_bid(
+		id: BidIdOf<T>,
+		maybe_check_owner: Option<T::AccountId>,
+	) -> DispatchResult {
+		let result = T::Market::close_bid(id, maybe_check_owner).map_err(Into::into)?;
+		Self::refund(&result.owner, result.refund)?;
+
+		Self::deposit_event(Event::BidClosed { bid_id: id, owner: result.owner });
+
+		Ok(())
+	}
+
 	pub(crate) fn do_transfer(
 		region_id: RegionId,
 		maybe_check_owner: Option<T::AccountId>,
@@ -249,7 +264,7 @@ impl<T: Config> Pallet<T> {
 		maybe_check_owner: Option<T::AccountId>,
 		pivot_offset: Timeslice,
 	) -> Result<(RegionId, RegionId), Error<T>> {
-		let status = Status::<T>::get().ok_or(Error::<T>::Uninitialized)?;
+		let status = Self::market_status().ok_or(Error::<T>::Uninitialized)?;
 		let mut region = Regions::<T>::get(&region_id).ok_or(Error::<T>::UnknownRegion)?;
 
 		if let Some(check_owner) = maybe_check_owner {
@@ -281,7 +296,7 @@ impl<T: Config> Pallet<T> {
 		maybe_check_owner: Option<T::AccountId>,
 		pivot: CoreMask,
 	) -> Result<(RegionId, RegionId), Error<T>> {
-		let status = Status::<T>::get().ok_or(Error::<T>::Uninitialized)?;
+		let status = Self::market_status().ok_or(Error::<T>::Uninitialized)?;
 		let region = Regions::<T>::get(&region_id).ok_or(Error::<T>::UnknownRegion)?;
 
 		if let Some(check_owner) = maybe_check_owner {
@@ -316,8 +331,8 @@ impl<T: Config> Pallet<T> {
 		target: TaskId,
 		finality: Finality,
 	) -> Result<(), Error<T>> {
-		let config = Configuration::<T>::get().ok_or(Error::<T>::Uninitialized)?;
-		let status = Status::<T>::get().ok_or(Error::<T>::Uninitialized)?;
+		let config = Self::market_configuration().ok_or(Error::<T>::Uninitialized)?;
+		let status = Self::market_status().ok_or(Error::<T>::Uninitialized)?;
 
 		if let Some((region_id, region)) = Self::utilize(region_id, maybe_check_owner, finality)? {
 			let workplan_key = (region_id.begin, region_id.core);
@@ -475,7 +490,7 @@ impl<T: Config> Pallet<T> {
 	}
 
 	pub(crate) fn do_drop_region(region_id: RegionId) -> DispatchResult {
-		let status = Status::<T>::get().ok_or(Error::<T>::Uninitialized)?;
+		let status = Self::market_status().ok_or(Error::<T>::Uninitialized)?;
 		let region = Regions::<T>::get(&region_id).ok_or(Error::<T>::UnknownRegion)?;
 		ensure!(status.last_committed_timeslice >= region.end, Error::<T>::StillValid);
 
@@ -486,8 +501,8 @@ impl<T: Config> Pallet<T> {
 	}
 
 	pub(crate) fn do_drop_contribution(region_id: RegionId) -> DispatchResult {
-		let config = Configuration::<T>::get().ok_or(Error::<T>::Uninitialized)?;
-		let status = Status::<T>::get().ok_or(Error::<T>::Uninitialized)?;
+		let config = Self::market_configuration().ok_or(Error::<T>::Uninitialized)?;
+		let status = Self::market_status().ok_or(Error::<T>::Uninitialized)?;
 		let contrib =
 			InstaPoolContribution::<T>::get(&region_id).ok_or(Error::<T>::UnknownContribution)?;
 		let end = region_id.begin.saturating_add(contrib.length);
@@ -501,8 +516,8 @@ impl<T: Config> Pallet<T> {
 	}
 
 	pub(crate) fn do_drop_history(when: Timeslice) -> DispatchResult {
-		let config = Configuration::<T>::get().ok_or(Error::<T>::Uninitialized)?;
-		let status = Status::<T>::get().ok_or(Error::<T>::Uninitialized)?;
+		let config = Self::market_configuration().ok_or(Error::<T>::Uninitialized)?;
+		let status = Self::market_status().ok_or(Error::<T>::Uninitialized)?;
 		ensure!(
 			status.last_timeslice > when.saturating_add(config.contribution_timeout),
 			Error::<T>::StillValid
@@ -517,7 +532,7 @@ impl<T: Config> Pallet<T> {
 	}
 
 	pub(crate) fn do_drop_renewal(core: CoreIndex, when: Timeslice) -> DispatchResult {
-		let status = Status::<T>::get().ok_or(Error::<T>::Uninitialized)?;
+		let status = Self::market_status().ok_or(Error::<T>::Uninitialized)?;
 		ensure!(status.last_committed_timeslice >= when, Error::<T>::StillValid);
 		let id = PotentialRenewalId { core, when };
 		ensure!(PotentialRenewals::<T>::contains_key(id), Error::<T>::UnknownRenewal);
@@ -554,7 +569,7 @@ impl<T: Config> Pallet<T> {
 		task: TaskId,
 		workload_end_hint: Option<Timeslice>,
 	) -> DispatchResult {
-		let sale = SaleInfo::<T>::get().ok_or(Error::<T>::NoSales)?;
+		let sale = Self::market_sale_info().ok_or(Error::<T>::NoSales)?;
 		let mut core = core;
 
 		// Check if the core is expiring in the next bulk period; if so, we will renew it now.
@@ -627,18 +642,6 @@ impl<T: Config> Pallet<T> {
 		PotentialRenewals::<T>::take(renewal_id).ok_or(Error::<T>::UnknownRenewal)?;
 
 		Self::deposit_event(Event::PotentialRenewalRemoved { core, timeslice: when });
-
-		Ok(())
-	}
-
-	pub(crate) fn do_close_bid(
-		id: BidIdOf<T>,
-		maybe_check_owner: Option<T::AccountId>,
-	) -> DispatchResult {
-		let result = Pallet::<T>::close_bid(id, maybe_check_owner)?;
-		Self::refund(&result.owner, result.refund)?;
-
-		Self::deposit_event(Event::BidClosed { bid_id: id, owner: result.owner });
 
 		Ok(())
 	}

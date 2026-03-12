@@ -31,8 +31,9 @@ use frame_support::{
 use sp_arithmetic::FixedPointNumber;
 use sp_coretime::{
 	AdaptPrice, AdaptedPrices, CloseBidResult, ConfigRecord, CoreCountProvider, CoreIndex,
-	CoreMask, Market, MarketError, OrderResult, PotentialRenewalId, RegionId, RenewalOrderResult,
-	SaleInfoRecord, SalePerformance, SalesStarted, StatusRecord, TickAction, Timeslice,
+	CoreMask, Market, MarketError, MarketState, OrderResult, PotentialRenewalId, RegionId,
+	RenewalOrderResult, SaleInfoRecord, SalePerformance, SalesStarted, StatusRecord, TickAction,
+	Timeslice,
 };
 use sp_runtime::{
 	traits::{AtLeast32BitUnsigned, SaturatedConversion, Saturating, Zero},
@@ -261,6 +262,36 @@ impl<T: Config> Market for Pallet<T> {
 		Status::<T>::put(status);
 
 		actions
+	}
+}
+
+impl<T: Config> MarketState for Pallet<T> {
+	fn configuration() -> Option<ConfigRecordOf<T>> {
+		Configuration::<T>::get()
+	}
+
+	fn set_configuration(config: ConfigRecordOf<T>) {
+		Configuration::<T>::put(config);
+	}
+
+	fn status() -> Option<StatusRecord> {
+		Status::<T>::get()
+	}
+
+	fn set_status(status: StatusRecord) {
+		Status::<T>::put(status);
+	}
+
+	fn sale_info() -> Option<SaleInfoRecordOf<T>> {
+		SaleInfo::<T>::get()
+	}
+
+	fn set_sale_info(sale_info: SaleInfoRecordOf<T>) {
+		SaleInfo::<T>::put(sale_info);
+	}
+
+	fn current_price(block_number: RelayBlockNumberOf<T>) -> Option<BalanceOf<T>> {
+		SaleInfo::<T>::get().map(|sale| sell_price::<T>(block_number, &sale))
 	}
 }
 

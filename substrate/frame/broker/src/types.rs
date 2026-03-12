@@ -17,7 +17,7 @@
 
 use crate::{
 	Config, CoreAssignment, CoreIndex, CoreMask, CoreMaskBitCount, CoretimeInterface, Market,
-	Pallet, RCBlockNumberOf, SignedCoreMaskBitCount, TaskId, Timeslice, CORE_MASK_BITS,
+	RCBlockNumberOf, SignedCoreMaskBitCount, TaskId, TickAction, Timeslice, CORE_MASK_BITS,
 };
 use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
 use frame_support::traits::fungible::Inspect;
@@ -30,10 +30,12 @@ pub type BalanceOf<T> = <<T as Config>::Currency as Inspect<<T as SConfig>::Acco
 pub type RelayBalanceOf<T> = <<T as Config>::Coretime as CoretimeInterface>::Balance;
 pub type RelayBlockNumberOf<T> = RCBlockNumberOf<<T as Config>::Coretime>;
 pub type RelayAccountIdOf<T> = <<T as Config>::Coretime as CoretimeInterface>::AccountId;
-pub type BidIdOf<T> = <Pallet<T> as Market>::BidId;
+pub type BidIdOf<T> = <<T as Config>::Market as Market>::BidId;
 pub type SaleInfoRecordOf<T> =
 	crate::SaleInfoRecord<BalanceOf<T>, RelayBlockNumberOf<T>>;
 pub type ConfigRecordOf<T> = crate::ConfigRecord<RelayBlockNumberOf<T>>;
+pub type TickActionOf<T> =
+	TickAction<BalanceOf<T>, RelayBlockNumberOf<T>, <T as SConfig>::AccountId, BidIdOf<T>>;
 
 /// Whether a core assignment is revokable or not.
 #[derive(

@@ -30,11 +30,11 @@ use frame_support::{
 	},
 };
 use frame_system::{Pallet as System, RawOrigin};
-use sp_arithmetic::{FixedU64, Perbill};
+use sp_arithmetic::Perbill;
 use sp_core::Get;
 use sp_runtime::{
 	traits::{BlockNumberProvider, MaybeConvert},
-	DispatchError, FixedPointNumber, Saturating,
+	DispatchError, Saturating,
 };
 
 const SEED: u32 = 0;
@@ -104,7 +104,7 @@ struct StartedSale<Balance> {
 }
 
 fn setup_and_start_sale<T: Config>() -> Result<StartedSale<BalanceOf<T>>, BenchmarkError> {
-	Configuration::<T>::put(new_config_record::<T>());
+	Broker::<T>::set_market_configuration(new_config_record::<T>());
 
 	// Assume Reservations to be filled for worst case
 	setup_reservations::<T>(T::MaxReservedCores::get());
@@ -113,33 +113,19 @@ fn setup_and_start_sale<T: Config>() -> Result<StartedSale<BalanceOf<T>>, Benchm
 	setup_leases::<T>(T::MaxLeasedCores::get(), 1, 10);
 
 	let initial_price = 10_000_000u32.into();
-	let (start_price, end_price) = get_start_end_price::<T>(initial_price);
 	Broker::<T>::do_start_sales(initial_price, MAX_CORE_COUNT.into())
 		.map_err(|_| BenchmarkError::Weightless)?;
+	let sale = Broker::<T>::market_sale_info().ok_or(BenchmarkError::Weightless)?;
+	let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
+	let start_price = T::Market::current_price(now).ok_or(BenchmarkError::Weightless)?;
 
 	let sale_data = StartedSale {
 		start_price,
-		end_price,
-		first_core: T::MaxReservedCores::get()
-			.saturating_add(T::MaxLeasedCores::get())
-			.try_into()
-			.unwrap(),
+		end_price: sale.end_price,
+		first_core: sale.first_core,
 	};
 
 	Ok(sale_data)
-}
-
-fn get_start_end_price<T: Config>(initial_price: BalanceOf<T>) -> (BalanceOf<T>, BalanceOf<T>) {
-	let end_price = <T as Config>::PriceAdapter::adapt_price(SalePerformance {
-		sellout_price: None,
-		end_price: initial_price,
-		ideal_cores_sold: 0,
-		cores_offered: 0,
-		cores_sold: 0,
-	})
-	.end_price;
-	let start_price = market::leadin_factor_at(FixedU64::from(0)).saturating_mul_int(end_price);
-	(start_price, end_price)
 }
 
 fn purchase_and_get_region_id<T: Config>(
@@ -148,7 +134,7 @@ fn purchase_and_get_region_id<T: Config>(
 ) -> Result<RegionId, DispatchError> {
 	Broker::<T>::do_purchase(who, price_limit)?;
 
-	let sale = SaleInfo::<T>::get().expect("Sale should exist");
+	let sale = Broker::<T>::market_sale_info().expect("Sale should exist");
 
 	let begin = sale.region_begin;
 	let core = sale.first_core.saturating_add(sale.cores_sold) - 1;
@@ -174,7 +160,7 @@ mod benches {
 		#[extrinsic_call]
 		_(origin as T::RuntimeOrigin, config.clone());
 
-		assert_eq!(Configuration::<T>::get(), Some(config));
+		assert_eq!(Broker::<T>::market_configuration(), Some(config));
 
 		Ok(())
 	}
@@ -263,7 +249,7 @@ mod benches {
 	#[benchmark]
 	fn start_sales(n: Linear<0, { MAX_CORE_COUNT.into() }>) -> Result<(), BenchmarkError> {
 		let config = new_config_record::<T>();
-		Configuration::<T>::put(config.clone());
+		Broker::<T>::set_market_configuration(config.clone());
 
 		let mut extra_cores = n;
 
@@ -275,33 +261,26 @@ mod benches {
 		setup_leases::<T>(extra_cores.min(T::MaxLeasedCores::get()), 1, 10);
 		extra_cores = extra_cores.saturating_sub(T::MaxLeasedCores::get());
 
-		let latest_region_begin = Broker::<T>::latest_timeslice_ready_to_commit(&config);
-
 		let initial_price = 10_000_000u32.into();
-		let (start_price, end_price) = get_start_end_price::<T>(initial_price);
 		let origin =
 			T::AdminOrigin::try_successful_origin().map_err(|_| BenchmarkError::Weightless)?;
 
 		#[extrinsic_call]
 		_(origin as T::RuntimeOrigin, initial_price, extra_cores.try_into().unwrap());
 
-		assert!(SaleInfo::<T>::get().is_some());
-		let sale_start = RCBlockNumberProviderOf::<T::Coretime>::current_block_number() +
-			config.interlude_length;
+		let sale = Broker::<T>::market_sale_info().ok_or(BenchmarkError::Weightless)?;
+		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
+		let start_price = T::Market::current_price(now).ok_or(BenchmarkError::Weightless)?;
 		assert_last_event::<T>(
 			Event::SaleInitialized {
-				sale_start,
-				leadin_length: 1u32.into(),
+				sale_start: sale.sale_start,
+				leadin_length: sale.leadin_length,
 				start_price,
-				end_price,
-				region_begin: latest_region_begin + config.region_length,
-				region_end: latest_region_begin + config.region_length * 2,
-				ideal_cores_sold: 0,
-				cores_offered: n
-					.saturating_sub(T::MaxReservedCores::get())
-					.saturating_sub(T::MaxLeasedCores::get())
-					.try_into()
-					.unwrap(),
+				end_price: sale.end_price,
+				region_begin: sale.region_begin,
+				region_end: sale.region_end,
+				ideal_cores_sold: sale.ideal_cores_sold,
+				cores_offered: sale.cores_offered,
 			}
 			.into(),
 		);
@@ -324,12 +303,16 @@ mod benches {
 		#[extrinsic_call]
 		_(RawOrigin::Signed(caller.clone()), sale_data.start_price);
 
-		assert_eq!(SaleInfo::<T>::get().unwrap().sellout_price.unwrap(), sale_data.end_price);
+		assert_eq!(
+			Broker::<T>::market_sale_info().unwrap().sellout_price.unwrap(),
+			sale_data.end_price
+		);
+		let sale = Broker::<T>::market_sale_info().unwrap();
 		assert_last_event::<T>(
 			Event::Purchased {
 				who: caller,
 				region_id: RegionId {
-					begin: SaleInfo::<T>::get().unwrap().region_begin,
+					begin: sale.region_begin,
 					core: sale_data.first_core,
 					mask: CoreMask::complete(),
 				},
@@ -345,7 +328,7 @@ mod benches {
 	#[benchmark]
 	fn renew() -> Result<(), BenchmarkError> {
 		let sale_data = setup_and_start_sale::<T>()?;
-		let region_len = Configuration::<T>::get().unwrap().region_length;
+		let region_len = Broker::<T>::market_configuration().unwrap().region_length;
 
 		advance_to::<T>(2);
 
@@ -665,7 +648,7 @@ mod benches {
 	fn drop_region() -> Result<(), BenchmarkError> {
 		let sale_data = setup_and_start_sale::<T>()?;
 		let core = sale_data.first_core;
-		let region_len = Configuration::<T>::get().unwrap().region_length;
+		let region_len = Broker::<T>::market_configuration().unwrap().region_length;
 
 		advance_to::<T>(2);
 
@@ -700,7 +683,7 @@ mod benches {
 	fn drop_contribution() -> Result<(), BenchmarkError> {
 		let sale_data = setup_and_start_sale::<T>()?;
 		let core = sale_data.first_core;
-		let region_len = Configuration::<T>::get().unwrap().region_length;
+		let region_len = Broker::<T>::market_configuration().unwrap().region_length;
 
 		advance_to::<T>(2);
 
@@ -740,7 +723,7 @@ mod benches {
 		setup_and_start_sale::<T>()?;
 		let when = 5u32.into();
 		let revenue = 10_000_000u32.into();
-		let region_len = Configuration::<T>::get().unwrap().region_length;
+		let region_len = Broker::<T>::market_configuration().unwrap().region_length;
 
 		advance_to::<T>(
 			(T::TimeslicePeriod::get() * (region_len * 8).into()).try_into().ok().unwrap(),
@@ -770,7 +753,7 @@ mod benches {
 		let sale_data = setup_and_start_sale::<T>()?;
 		let core = sale_data.first_core;
 		let when = 5u32.into();
-		let region_len = Configuration::<T>::get().unwrap().region_length;
+		let region_len = Broker::<T>::market_configuration().unwrap().region_length;
 
 		advance_to::<T>(
 			(T::TimeslicePeriod::get() * (region_len * 3).into()).try_into().ok().unwrap(),
@@ -817,7 +800,7 @@ mod benches {
 
 		CoreCountInbox::<T>::put(core_count);
 
-		let mut status = Status::<T>::get().ok_or(BenchmarkError::Weightless)?;
+		let mut status = Broker::<T>::market_status().ok_or(BenchmarkError::Weightless)?;
 
 		#[block]
 		{
@@ -924,16 +907,16 @@ mod benches {
 
 		advance_to::<T>(5);
 
-		let mut status = Status::<T>::get().unwrap();
+		let mut status = Broker::<T>::market_status().unwrap();
 		status.last_committed_timeslice = 3;
-		Status::<T>::put(&status);
+		Broker::<T>::set_market_status(status.clone());
 
 		#[block]
 		{
 			Broker::<T>::do_tick();
 		}
 
-		let updated_status = Status::<T>::get().unwrap();
+		let updated_status = Broker::<T>::market_status().unwrap();
 		assert_eq!(status, updated_status);
 
 		Ok(())
@@ -941,7 +924,7 @@ mod benches {
 
 	#[benchmark]
 	fn force_reserve() -> Result<(), BenchmarkError> {
-		Configuration::<T>::put(new_config_record::<T>());
+		Broker::<T>::set_market_configuration(new_config_record::<T>());
 		// Assume Reservations to be almost filled for worst case.
 		let reservation_count = T::MaxReservedCores::get().saturating_sub(1);
 		setup_reservations::<T>(reservation_count);
@@ -957,7 +940,7 @@ mod benches {
 			.map_err(|_| BenchmarkError::Weightless)?;
 
 		// Add a core.
-		let core_count = Status::<T>::get().unwrap().core_count;
+		let core_count = Broker::<T>::market_status().unwrap().core_count;
 		Broker::<T>::do_request_core_count(core_count + 1).unwrap();
 
 		advance_to::<T>(T::TimeslicePeriod::get().try_into().ok().unwrap());
@@ -996,7 +979,7 @@ mod benches {
 
 		advance_to::<T>(2);
 
-		let sale = SaleInfo::<T>::get().expect("Sale has already started.");
+		let sale = Broker::<T>::market_sale_info().expect("Sale has already started.");
 		// We assume max auto renewals for worst case.
 		(0..T::MaxAutoRenewals::get() - 1).try_for_each(|indx| -> Result<(), BenchmarkError> {
 			let task = 1000 + indx;
@@ -1037,7 +1020,7 @@ mod benches {
 		// The most 'intensive' path is when we renew the core upon enabling auto-renewal.
 		// Therefore, we advance to next bulk sale:
 		let timeslice_period: u32 = T::TimeslicePeriod::get().try_into().ok().unwrap();
-		let config = Configuration::<T>::get().expect("Already configured.");
+		let config = Broker::<T>::market_configuration().expect("Already configured.");
 		advance_to::<T>(config.region_length * timeslice_period);
 
 		#[extrinsic_call]
@@ -1045,7 +1028,7 @@ mod benches {
 
 		assert_last_event::<T>(Event::AutoRenewalEnabled { core: region.core, task: 2001 }.into());
 		// Make sure we indeed renewed:
-		let sale = SaleInfo::<T>::get().expect("Sales have started.");
+		let sale = Broker::<T>::market_sale_info().expect("Sales have started.");
 		assert!(PotentialRenewals::<T>::get(PotentialRenewalId {
 			core: region.core,
 			when: sale.region_end,
@@ -1062,7 +1045,7 @@ mod benches {
 
 		advance_to::<T>(2);
 
-		let sale = SaleInfo::<T>::get().expect("Sale has already started.");
+		let sale = Broker::<T>::market_sale_info().expect("Sale has already started.");
 		// We assume max auto renewals for worst case.
 		(0..T::MaxAutoRenewals::get()).try_for_each(|indx| -> Result<(), BenchmarkError> {
 			let task = 1000 + indx;
@@ -1181,20 +1164,6 @@ mod benches {
 	}
 
 	#[benchmark]
-	fn process_tick_action_bid_closed() {
-		let owner: T::AccountId = whitelisted_caller();
-		let action = TickAction::BidClosed { id: (), owner: owner.clone() };
-		let mut meter = WeightMeter::new();
-
-		#[block]
-		{
-			Broker::<T>::process_tick_action(action, &mut meter);
-		}
-
-		assert_last_event::<T>(Event::BidClosed { bid_id: (), owner }.into());
-	}
-
-	#[benchmark]
 	fn process_tick_action_renew_region() {
 		#[block]
 		{
@@ -1209,9 +1178,8 @@ mod benches {
 		let action = TickAction::SellRegion {
 			owner: owner.clone(),
 			paid: T::Currency::minimum_balance(),
-			region_begin: 0,
+			region_id: RegionId { begin: 0, core: 0, mask: CoreMask::complete() },
 			region_end: 1,
-			core: 0,
 		};
 		let mut meter = WeightMeter::new();
 
@@ -1245,7 +1213,7 @@ mod benches {
 		n: Linear<0, { MAX_CORE_COUNT.into() }>,
 	) -> Result<(), BenchmarkError> {
 		let config = new_config_record::<T>();
-		Configuration::<T>::put(config.clone());
+		Broker::<T>::set_market_configuration(config.clone());
 
 		// Ensure there is one buyable core then use the rest to max out reservations and leases, if
 		// possible for worst case.
@@ -1260,7 +1228,6 @@ mod benches {
 
 		// Start sales so we can test the auto-renewals.
 		let initial_price = 10_000_000u32.into();
-		let (start_price, _) = get_start_end_price::<T>(initial_price);
 		Broker::<T>::do_start_sales(
 			initial_price,
 			n.saturating_sub(n_reservations)
@@ -1279,10 +1246,11 @@ mod benches {
 			.min(n.saturating_sub(n_leases).saturating_sub(n_reservations));
 
 		let timeslice_period: u32 = T::TimeslicePeriod::get().try_into().ok().unwrap();
-		let sale = SaleInfo::<T>::get().expect("Sale has started.");
+		let sale = Broker::<T>::market_sale_info().expect("Sale has started.");
 
 		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
-		let price = market::sell_price::<T>(now, &sale);
+		let start_price = T::Market::current_price(now).ok_or(BenchmarkError::Weightless)?;
+		let price = start_price;
 		(0..n_renewable.into()).try_for_each(|indx| -> Result<(), BenchmarkError> {
 			let task = 1000 + indx;
 			let caller: T::AccountId = T::SovereignAccountOf::maybe_convert(task)
@@ -1312,21 +1280,18 @@ mod benches {
 		// Advance one block and manually tick so we can isolate the `rotate_sale` call.
 		System::<T>::set_block_number(rotate_block.into());
 		RCBlockNumberProviderOf::<T::Coretime>::set_block_number(rotate_block.into());
-		let mut status = Status::<T>::get().expect("Sale has started.");
-		let sale = SaleInfo::<T>::get().expect("Sale has started.");
+		let mut status = Broker::<T>::market_status().expect("Sale has started.");
 		Broker::<T>::process_core_count(&mut status);
 		Broker::<T>::process_revenue();
 		status.last_committed_timeslice = config.region_length;
-		Status::<T>::put(status.clone());
+		Broker::<T>::set_market_status(status);
 
 		let block = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
-		let reserved_cores = <Broker<T> as Market>::CoreCount::reserved_core_count();
-		let (new_prices, new_sale) =
-			market::rotate_sale::<T>(&sale, &config, &status, reserved_cores, block);
-		SaleInfo::<T>::put(new_sale.clone());
-		let start_price = market::sell_price::<T>(block, &new_sale);
-		let action =
-			TickAction::SaleRotated { old_sale: sale.clone(), new_sale, new_prices, start_price };
+		let mut setup_meter = WeightMeter::new();
+		let action = T::Market::tick(block, &mut setup_meter)
+			.into_iter()
+			.find(|action| matches!(action, TickAction::SaleRotated { .. }))
+			.ok_or(BenchmarkError::Weightless)?;
 
 		let mut meter = WeightMeter::new();
 
@@ -1335,26 +1300,19 @@ mod benches {
 			Broker::<T>::process_tick_action(action, &mut meter);
 		}
 
-		// Get prices from the actual price adapter.
-		let new_prices = T::PriceAdapter::adapt_price(SalePerformance::from_sale(&sale));
-		let new_sale = SaleInfo::<T>::get().expect("Sale has started.");
-		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
-		let sale_start = config.interlude_length.saturating_add(rotate_block.into());
+		let new_sale = Broker::<T>::market_sale_info().expect("Sale has started.");
+		let start_price = T::Market::current_price(block).ok_or(BenchmarkError::Weightless)?;
 
 		assert_has_event::<T>(
 			Event::SaleInitialized {
-				sale_start,
-				leadin_length: 1u32.into(),
+				sale_start: new_sale.sale_start,
+				leadin_length: new_sale.leadin_length,
 				start_price,
-				end_price: new_prices.end_price,
-				region_begin: sale.region_begin + config.region_length,
-				region_end: sale.region_end + config.region_length,
-				ideal_cores_sold: 0,
-				cores_offered: n
-					.saturating_sub(n_reservations)
-					.saturating_sub(n_leases)
-					.try_into()
-					.unwrap(),
+				end_price: new_sale.end_price,
+				region_begin: new_sale.region_begin,
+				region_end: new_sale.region_end,
+				ideal_cores_sold: new_sale.ideal_cores_sold,
+				cores_offered: new_sale.cores_offered,
 			}
 			.into(),
 		);
@@ -1401,7 +1359,7 @@ mod benches {
 
 		let timeslice = status.last_committed_timeslice;
 
-		Status::<T>::put(status.clone());
+		Broker::<T>::set_market_status(status.clone());
 
 		for core in 0..status.core_count {
 			Workplan::<T>::insert((timeslice, core), new_schedule());
@@ -1438,59 +1396,6 @@ mod benches {
 	}
 
 	#[benchmark]
-	fn market_sale_rotated() -> Result<(), BenchmarkError> {
-		setup_and_start_sale::<T>()?;
-
-		let config = new_config_record::<T>();
-		let sale = SaleInfo::<T>::get().expect("Sale should be present at this point");
-		let status = StatusRecord {
-			core_count: 0,
-			private_pool_size: 0,
-			system_pool_size: 0,
-			last_committed_timeslice: 0,
-			last_timeslice: 0,
-		};
-		let block_number = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
-		let mut actions = vec![];
-
-		#[block]
-		{
-			market::sale_rotated::<T, Broker<T>>(
-				sale,
-				&config,
-				&status,
-				block_number,
-				&mut actions,
-			);
-		}
-
-		assert_eq!(actions.len(), 1);
-		assert!(matches!(actions[0], TickAction::SaleRotated { .. }));
-
-		Ok(())
-	}
-
-	#[benchmark]
-	fn market_last_timeslice_changed() {
-		let mut status = StatusRecord {
-			core_count: 0,
-			private_pool_size: 0,
-			system_pool_size: 0,
-			last_committed_timeslice: 0,
-			last_timeslice: 0,
-		};
-		let mut actions = vec![];
-
-		#[block]
-		{
-			market::last_timeslice_changed::<T>(&mut status, &mut actions);
-		}
-
-		assert_eq!(actions.len(), 1);
-		assert!(matches!(actions[0], TickAction::LastTimesliceChanged { .. }));
-	}
-
-	#[benchmark]
 	fn force_transfer() -> Result<(), BenchmarkError> {
 		let sale_data = setup_and_start_sale::<T>()?;
 		advance_to::<T>(2);
@@ -1501,7 +1406,7 @@ mod benches {
 			T::Currency::minimum_balance().saturating_add(sale_data.start_price),
 		);
 
-		let region = Broker::<T>::do_purchase(caller.clone(), sale_data.start_price)
+		let region = purchase_and_get_region_id::<T>(caller.clone(), sale_data.start_price)
 			.expect("Offer not high enough for configuration.");
 
 		let recipient: T::AccountId = account("recipient", 0, SEED);

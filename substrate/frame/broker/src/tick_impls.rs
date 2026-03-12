@@ -38,7 +38,7 @@ impl<T: Config> Pallet<T> {
 		let mut meter = WeightMeter::new();
 		meter.consume(T::WeightInfo::do_tick_base());
 
-		let Some(mut status) = Status::<T>::get() else {
+		let Some(mut status) = Self::market_status() else {
 			return meter.consumed();
 		};
 
@@ -46,7 +46,7 @@ impl<T: Config> Pallet<T> {
 			meter.consume(T::WeightInfo::process_core_count(status.core_count.into()));
 		}
 
-		Status::<T>::put(&status);
+		Self::set_market_status(status);
 
 		if Self::process_revenue() {
 			meter.consume(T::WeightInfo::process_revenue());
@@ -124,20 +124,15 @@ impl<T: Config> Pallet<T> {
 
 	pub(crate) fn process_market_logic(meter: &mut WeightMeter) {
 		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
-		let result = <Self as Market>::tick(now, meter);
+		let result = T::Market::tick(now, meter);
 
 		for action in result {
 			Self::process_tick_action(action, meter);
 		}
 	}
 
-	pub(crate) fn process_tick_action(action: crate::market::TickActionOf<T>, meter: &mut WeightMeter) {
+	pub(crate) fn process_tick_action(action: TickActionOf<T>, meter: &mut WeightMeter) {
 		match action {
-			TickAction::BidClosed { id, owner } => {
-				meter.consume(T::WeightInfo::process_tick_action_bid_closed());
-
-				Self::deposit_event(Event::BidClosed { bid_id: id, owner });
-			},
 			TickAction::RenewRegion { owner, renewal_id } => {
 				meter.consume(T::WeightInfo::process_tick_action_renew_region());
 
@@ -160,8 +155,13 @@ impl<T: Config> Pallet<T> {
 
 				Self::refund(&who, amount).defensive_ok();
 			},
+			TickAction::BidClosed { id, owner } => {
+				meter.consume(T::WeightInfo::process_tick_action_bid_closed());
+
+				Self::deposit_event(Event::BidClosed { bid_id: id, owner });
+			},
 			TickAction::SaleRotated { old_sale, new_sale, new_prices, start_price } => {
-				if let Some(status) = Status::<T>::get() {
+				if let Some(status) = Self::market_status() {
 					meter.consume(T::WeightInfo::process_tick_action_sale_rotated(
 						status.core_count.into(),
 					));
@@ -173,7 +173,7 @@ impl<T: Config> Pallet<T> {
 				}
 			},
 			TickAction::TimesliceCommited { timeslice } => {
-				if let Some(mut status) = Status::<T>::get() {
+				if let Some(mut status) = Self::market_status() {
 					meter.consume(T::WeightInfo::process_tick_action_timeslice_commited(
 						status.core_count.into(),
 					));
@@ -186,7 +186,7 @@ impl<T: Config> Pallet<T> {
 						Self::process_core_schedule(timeslice, rc_begin, core);
 					}
 
-					Status::<T>::put(status);
+					Self::set_market_status(status);
 				} else {
 					// Consume for the storage read.
 					meter.consume(T::WeightInfo::process_tick_action_timeslice_commited(0));
@@ -336,7 +336,7 @@ impl<T: Config> Pallet<T> {
 							payer: Some(payer),
 						});
 
-						let _ = Self::close_bid(id, None);
+						let _ = Self::do_close_bid(id, None);
 
 						None
 					},

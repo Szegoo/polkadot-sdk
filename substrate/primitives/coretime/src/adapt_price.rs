@@ -15,12 +15,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![deny(missing_docs)]
-
 use crate::{CoreIndex, SaleInfoRecord};
-use sp_arithmetic::FixedU64;
-use sp_core::Get;
-use sp_runtime::{FixedPointNumber, FixedPointOperand};
+use sp_runtime::{FixedPointNumber, FixedPointOperand, FixedU64};
 
 /// Performance of a past sale.
 #[derive(Copy, Clone)]
@@ -29,35 +25,14 @@ pub struct SalePerformance<Balance> {
 	///
 	/// Will be `None` if no cores have been offered.
 	pub sellout_price: Option<Balance>,
-
 	/// The minimum price that was achieved in this sale.
 	pub end_price: Balance,
-
 	/// The number of cores we want to sell, ideally.
 	pub ideal_cores_sold: CoreIndex,
-
 	/// Number of cores which are/have been offered for sale.
 	pub cores_offered: CoreIndex,
-
 	/// Number of cores which have been sold; never more than cores_offered.
 	pub cores_sold: CoreIndex,
-}
-
-/// Result of `AdaptPrice::adapt_price`.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub struct AdaptedPrices<Balance> {
-	/// New minimum price to use.
-	pub end_price: Balance,
-
-	/// Price the controller is optimizing for.
-	///
-	/// This is the price "expected" by the controller based on the previous sale. We assume that
-	/// sales in this period will be around this price, assuming stable market conditions.
-	///
-	/// Think of it as the expected market price. This can be used for determining what to charge
-	/// for renewals, that don't yet have any price information for example. E.g. for expired
-	/// legacy leases.
-	pub target_price: Balance,
 }
 
 impl<Balance: Copy> SalePerformance<Balance> {
@@ -76,6 +51,22 @@ impl<Balance: Copy> SalePerformance<Balance> {
 	fn new(sellout_price: Option<Balance>, end_price: Balance) -> Self {
 		Self { sellout_price, end_price, ideal_cores_sold: 0, cores_offered: 0, cores_sold: 0 }
 	}
+}
+
+/// Result of `AdaptPrice::adapt_price`.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct AdaptedPrices<Balance> {
+	/// New minimum price to use.
+	pub end_price: Balance,
+	/// Price the controller is optimizing for.
+	///
+	/// This is the price "expected" by the controller based on the previous sale. We assume that
+	/// sales in this period will be around this price, assuming stable market conditions.
+	///
+	/// Think of it as the expected market price. This can be used for determining what to charge
+	/// for renewals, that don't yet have any price information for example. E.g. for expired
+	/// legacy leases.
+	pub target_price: Balance,
 }
 
 /// Type for determining how to set price.
@@ -128,7 +119,7 @@ impl<Balance: FixedPointOperand> AdaptPrice<Balance> for CenterTargetPrice<Balan
 /// Target price will also get adjusted if necessary (it will never be less than the end_price).
 pub struct MinimumPrice<Balance, MinPrice>(core::marker::PhantomData<(Balance, MinPrice)>);
 
-impl<Balance: FixedPointOperand, MinPrice: Get<Balance>> AdaptPrice<Balance>
+impl<Balance: FixedPointOperand, MinPrice: sp_core::Get<Balance>> AdaptPrice<Balance>
 	for MinimumPrice<Balance, MinPrice>
 {
 	fn adapt_price(performance: SalePerformance<Balance>) -> AdaptedPrices<Balance> {
@@ -137,7 +128,6 @@ impl<Balance: FixedPointOperand, MinPrice: Get<Balance>> AdaptPrice<Balance>
 		if proposal.end_price < min_price {
 			proposal.end_price = min_price;
 		}
-		// Fix target price if necessary:
 		if proposal.target_price < proposal.end_price {
 			proposal.target_price = proposal.end_price;
 		}
@@ -147,9 +137,8 @@ impl<Balance: FixedPointOperand, MinPrice: Get<Balance>> AdaptPrice<Balance>
 
 #[cfg(test)]
 mod tests {
-	use sp_core::ConstU64;
-
 	use super::*;
+	use sp_core::ConstU64;
 
 	#[test]
 	fn linear_no_panic() {
@@ -161,29 +150,6 @@ mod tests {
 		}
 	}
 
-	// #[test]
-	// fn leadin_price_bound_check() {
-	// 	assert_eq!(
-	// 		CenterTargetPrice::<u64>::leadin_factor_at(FixedU64::from(0)),
-	// 		FixedU64::from(100)
-	// 	);
-	// 	assert_eq!(
-	// 		CenterTargetPrice::<u64>::leadin_factor_at(FixedU64::from_rational(1, 4)),
-	// 		FixedU64::from(55)
-	// 	);
-
-	// 	assert_eq!(
-	// 		CenterTargetPrice::<u64>::leadin_factor_at(FixedU64::from_float(0.5)),
-	// 		FixedU64::from(10)
-	// 	);
-
-	// 	assert_eq!(
-	// 		CenterTargetPrice::<u64>::leadin_factor_at(FixedU64::from_rational(3, 4)),
-	// 		FixedU64::from_float(5.5)
-	// 	);
-	// 	assert_eq!(CenterTargetPrice::<u64>::leadin_factor_at(FixedU64::one()), FixedU64::one());
-	// }
-
 	#[test]
 	fn no_op_sale_is_good() {
 		let prices = CenterTargetPrice::adapt_price(SalePerformance::new(None, 1));
@@ -193,7 +159,6 @@ mod tests {
 
 	#[test]
 	fn price_stays_stable_on_optimal_sale() {
-		// Check price stays stable if sold at the optimal price:
 		let mut performance = SalePerformance::new(Some(1000), 100);
 		for _ in 0..10 {
 			let prices = CenterTargetPrice::adapt_price(performance);
@@ -225,7 +190,6 @@ mod tests {
 
 	#[test]
 	fn price_never_goes_to_zero_and_recovers() {
-		// Check price stays stable if sold at the optimal price:
 		let sellout_price = 1;
 		let mut performance = SalePerformance::new(Some(sellout_price), 1);
 		for _ in 0..11 {

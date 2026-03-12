@@ -23,7 +23,6 @@ pub use pallet::*;
 mod benchmarking;
 mod coretime_interface;
 mod dispatchable_impls;
-mod market;
 #[cfg(test)]
 mod mock;
 mod nonfungible_impl;
@@ -92,8 +91,12 @@ pub mod pallet {
 		/// system.
 		type Coretime: CoretimeInterface;
 
-		/// The algorithm to determine the next price on the basis of market performance.
-		type PriceAdapter: AdaptPrice<BalanceOf<Self>>;
+		/// The market implementation to use for sale-specific logic.
+		type Market: Market<
+				AccountId = Self::AccountId,
+				Balance = BalanceOf<Self>,
+				BlockNumber = RelayBlockNumberOf<Self>,
+			> + MarketState;
 
 		/// Reversible conversion from local balance to Relay-chain balance. This will typically be
 		/// the `Identity`, but provided just in case the chains use different representations.
@@ -131,10 +134,6 @@ pub mod pallet {
 		type MinimumCreditPurchase: Get<BalanceOf<Self>>;
 	}
 
-	/// The current configuration of this pallet.
-	#[pallet::storage]
-	pub type Configuration<T> = StorageValue<_, ConfigRecordOf<T>, OptionQuery>;
-
 	/// The Polkadot Core reservations (generally tasked with the maintenance of System Chains).
 	#[pallet::storage]
 	pub type Reservations<T> = StorageValue<_, ReservationsRecordOf<T>, ValueQuery>;
@@ -148,14 +147,6 @@ pub mod pallet {
 	/// The Polkadot Core legacy leases.
 	#[pallet::storage]
 	pub type Leases<T> = StorageValue<_, LeasesRecordOf<T>, ValueQuery>;
-
-	/// The current status of miscellaneous subsystems of this pallet.
-	#[pallet::storage]
-	pub type Status<T> = StorageValue<_, StatusRecord, OptionQuery>;
-
-	/// The details of the current sale, including its properties and status.
-	#[pallet::storage]
-	pub type SaleInfo<T> = StorageValue<_, SaleInfoRecordOf<T>, OptionQuery>;
 
 	/// Records of potential renewals.
 	///

@@ -17,7 +17,7 @@
 
 #![cfg(test)]
 
-use crate::{dispatchable_impls::DoRenewResult, mock::*, *};
+use crate::{mock::*, *};
 use frame_support::{
 	assert_err, assert_noop, assert_ok,
 	traits::nonfungible::{Inspect as NftInspect, Mutate, Transfer},
@@ -568,7 +568,7 @@ fn renewal_price_adjusts_to_lower_market_end() {
 			assert_eq!(balance(1), b);
 			// No further price ramp up necessary - the price of this sale is relevant for next
 			// renewal.
-			let end_price = SaleInfo::<Test>::get().unwrap().end_price;
+			let end_price = Broker::market_sale_info().unwrap().end_price;
 
 			advance_to(4 * region_length_blocks);
 			assert_ok!(Broker::do_renew(1, core));
@@ -846,7 +846,7 @@ fn force_unpool_works() {
 		assert_eq!(Io::get(region.end), PoolIoRecord { private: -80, system: 0 });
 
 		// Force unpool before the region begins.
-		let status = Status::<Test>::get().unwrap();
+		let status = Broker::market_status().unwrap();
 		Broker::force_unpool_region(region_id, &region, &status);
 		System::assert_last_event(
 			Event::<Test>::RegionUnpooled { region_id, when: region_id.begin }.into(),
@@ -883,7 +883,7 @@ fn force_unpool_works() {
 		// Check the Io right now at key timeslices and then force unpool.
 		assert_eq!(Io::get(region.end), PoolIoRecord { private: -80, system: 0 });
 		assert_eq!(Io::get(current_timeslice), PoolIoRecord { private: 0, system: 0 });
-		let status = Status::<Test>::get().unwrap();
+		let status = Broker::market_status().unwrap();
 		Broker::force_unpool_region(region_id, &region, &status);
 
 		// Check that it is unpooled from the next uncommitted timeslice.
@@ -1505,7 +1505,7 @@ fn short_leases_are_cleaned() {
 		assert_eq!(Leases::<Test>::get().len(), 1);
 
 		// But are cleaned up in the next rotate_sale.
-		let config = Configuration::<Test>::get().unwrap();
+		let config = Broker::market_configuration().unwrap();
 		let timeslice_period: u64 = <Test as Config>::TimeslicePeriod::get();
 		advance_to(timeslice_period.saturating_mul(config.region_length.into()));
 		assert_eq!(Leases::<Test>::get().len(), 0);
@@ -1707,7 +1707,7 @@ fn purchase_requires_valid_status_and_sale_info() {
 			last_committed_timeslice: 0,
 			last_timeslice: 1,
 		};
-		Status::<Test>::put(&status);
+		Broker::set_market_status(status);
 		assert_noop!(do_purchase_and_get_region_id(1, 100), DispatchError::Other("NoSales"));
 
 		let mut dummy_sale = SaleInfoRecord {
@@ -1722,11 +1722,11 @@ fn purchase_requires_valid_status_and_sale_info() {
 			cores_offered: 1,
 			cores_sold: 2,
 		};
-		SaleInfo::<Test>::put(&dummy_sale);
+		Broker::set_market_sale_info(dummy_sale.clone());
 		assert_noop!(do_purchase_and_get_region_id(1, 100), DispatchError::Other("Unavailable"));
 
 		dummy_sale.first_core = 1;
-		SaleInfo::<Test>::put(&dummy_sale);
+		Broker::set_market_sale_info(dummy_sale.clone());
 		assert_noop!(do_purchase_and_get_region_id(1, 100), DispatchError::Other("SoldOut"));
 
 		assert_ok!(Broker::do_start_sales(200, 1));
@@ -1749,7 +1749,7 @@ fn renewal_requires_valid_status_and_sale_info() {
 			last_committed_timeslice: 0,
 			last_timeslice: 1,
 		};
-		Status::<Test>::put(&status);
+		Broker::set_market_status(status);
 		assert_noop!(Broker::do_renew(1, 1), Error::<Test>::NoSales);
 
 		let mut dummy_sale = SaleInfoRecord {
@@ -1764,11 +1764,11 @@ fn renewal_requires_valid_status_and_sale_info() {
 			cores_offered: 1,
 			cores_sold: 2,
 		};
-		SaleInfo::<Test>::put(&dummy_sale);
+		Broker::set_market_sale_info(dummy_sale.clone());
 		assert_noop!(Broker::do_renew(1, 1), Error::<Test>::NotAllowed);
 
 		dummy_sale.first_core = 1;
-		SaleInfo::<Test>::put(&dummy_sale);
+		Broker::set_market_sale_info(dummy_sale);
 		assert_noop!(Broker::do_renew(1, 1), Error::<Test>::NotAllowed);
 
 		assert_ok!(Broker::do_start_sales(200, 1));
@@ -1888,7 +1888,7 @@ fn config_works() {
 #[test]
 fn renewal_works_leases_ended_before_start_sales() {
 	TestExt::new().endow(1, 100_000).execute_with(|| {
-		let config = Configuration::<Test>::get().unwrap();
+		let config = Broker::market_configuration().unwrap();
 
 		// This lease is ended before `start_stales` was called.
 		assert_ok!(Broker::do_set_lease(1, 1));
@@ -2283,19 +2283,19 @@ fn enable_auto_renew_immediate_updates_core_and_renews() {
 		assert_ok!(Broker::do_assign(region_id, Some(1), 1001, Final));
 
 		// Rotate into the next sale where this region is renewable.
-		let sale = SaleInfo::<Test>::get().unwrap();
+		let sale = Broker::market_sale_info().unwrap();
 		let timeslice_period: u64 = <Test as Config>::TimeslicePeriod::get();
 		let next_sale_block = sale.region_begin as u64 * timeslice_period;
 		advance_to(next_sale_block);
 
-		let sale = SaleInfo::<Test>::get().unwrap();
+		let sale = Broker::market_sale_info().unwrap();
 		if System::block_number() <= sale.sale_start {
 			advance_to(sale.sale_start + 1);
 		}
 
 		// Pre-sell a core to ensure the renewal allocates a different core index.
 		let _ = do_purchase_and_get_region_id(2, u64::max_value()).unwrap();
-		let sale_before_renew = SaleInfo::<Test>::get().unwrap();
+		let sale_before_renew = Broker::market_sale_info().unwrap();
 		let expected_new_core = sale_before_renew.first_core + sale_before_renew.cores_sold;
 		assert_ne!(expected_new_core, region_id.core);
 
@@ -2326,7 +2326,7 @@ fn enable_auto_renew_immediate_updates_core_and_renews() {
 		// Next rotation should renew again and keep auto-renewal enabled.
 		let next_block = sale_before_renew.region_end as u64 * timeslice_period;
 		advance_to(next_block);
-		let sale_after_renew = SaleInfo::<Test>::get().unwrap();
+		let sale_after_renew = Broker::market_sale_info().unwrap();
 		let auto_after_renew = AutoRenewals::<Test>::get().to_vec();
 		assert_eq!(auto_after_renew.len(), 1);
 		assert_eq!(auto_after_renew[0].task, 1001);
@@ -2432,7 +2432,7 @@ fn reserve_works() {
 		// assert_noop!(Broker::do_reserve(system_workload.clone()), Error::<Test>::Unavailable);
 
 		// Add another core and create the reservation.
-		let status = Status::<Test>::get().unwrap();
+		let status = Broker::market_status().unwrap();
 		assert_ok!(Broker::request_core_count(RuntimeOrigin::root(), status.core_count + 1));
 		assert_ok!(Broker::reserve(RuntimeOrigin::root(), system_workload.clone()));
 
@@ -2504,7 +2504,7 @@ fn can_reserve_workloads_quickly() {
 		// assert_noop!(Broker::do_reserve(system_workload.clone()), Error::<Test>::Unavailable);
 
 		// Add another core and create the reservation.
-		let core_count = Status::<Test>::get().unwrap().core_count;
+		let core_count = Broker::market_status().unwrap().core_count;
 		assert_ok!(Broker::request_core_count(RuntimeOrigin::root(), core_count + 1));
 		assert_ok!(Broker::reserve(RuntimeOrigin::root(), system_workload.clone()));
 
@@ -3042,7 +3042,9 @@ fn do_renew_and_get_the_new_core(
 	who: <Test as frame_system::Config>::AccountId,
 	core: CoreIndex,
 ) -> Result<CoreIndex, DispatchError> {
-	let DoRenewResult::Renewed { new_core } = Broker::do_renew(who, core)? else {
+	let crate::dispatchable_impls::DoRenewResult::Renewed { new_core } =
+		Broker::do_renew(who, core)?
+	else {
 		panic!("It's expected that do_renew will immediately resolve")
 	};
 
