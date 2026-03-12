@@ -445,8 +445,8 @@ fn renewals_affect_price() {
 	let b = 100_000;
 	let config = ConfigRecord {
 		advance_notice: 2,
-		market_period_length: 20,
-		renewal_period_length: 10,
+		interlude_length: 10,
+		leadin_length: 20,
 		ideal_bulk_proportion: Perbill::from_percent(100),
 		limit_cores_offered: None,
 		// Region length is in time slices (2 blocks):
@@ -515,8 +515,8 @@ fn renewal_price_adjusts_to_lower_market_end() {
 	let region_length_blocks = 40;
 	let config = ConfigRecord {
 		advance_notice: 2,
-		market_period_length: 20,
-		renewal_period_length: 10,
+		interlude_length: 10,
+		leadin_length: 20,
 		ideal_bulk_proportion: Perbill::from_percent(100),
 		limit_cores_offered: None,
 		// Region length is in time slices (2 blocks):
@@ -547,7 +547,7 @@ fn renewal_price_adjusts_to_lower_market_end() {
 			let b = b - price;
 			assert_eq!(balance(1), b);
 			// Ramp up price:
-			advance_to(region_length_blocks + config.market_period_length + 1);
+			advance_to(region_length_blocks + config.interlude_length + 1);
 			do_purchase_and_get_region_id(2, u64::max_value()).unwrap();
 
 			advance_to(2 * region_length_blocks);
@@ -557,7 +557,7 @@ fn renewal_price_adjusts_to_lower_market_end() {
 			let b = b - price;
 			assert_eq!(balance(1), b);
 			// Ramp up price again:
-			advance_to(2 * region_length_blocks + config.market_period_length + 1);
+			advance_to(2 * region_length_blocks + config.interlude_length + 1);
 			do_purchase_and_get_region_id(2, u64::max_value()).unwrap();
 
 			advance_to(3 * region_length_blocks);
@@ -1712,7 +1712,7 @@ fn purchase_requires_valid_status_and_sale_info() {
 
 		let mut dummy_sale = SaleInfoRecord {
 			sale_start: 0,
-			market_period_length: 0,
+			leadin_length: 0,
 			end_price: 200,
 			sellout_price: None,
 			region_begin: 0,
@@ -1754,7 +1754,7 @@ fn renewal_requires_valid_status_and_sale_info() {
 
 		let mut dummy_sale = SaleInfoRecord {
 			sale_start: 0,
-			market_period_length: 0,
+			leadin_length: 0,
 			end_price: 200,
 			sellout_price: None,
 			region_begin: 0,
@@ -1879,7 +1879,7 @@ fn config_works() {
 		// Good config works:
 		assert_ok!(Broker::configure(Root.into(), cfg.clone()));
 		// Bad config is a noop:
-		cfg.market_period_length = 0;
+		cfg.leadin_length = 0;
 		assert_noop!(Broker::configure(Root.into(), cfg), Error::<Test>::InvalidConfig);
 	});
 }
