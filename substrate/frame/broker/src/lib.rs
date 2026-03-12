@@ -20,9 +20,7 @@
 
 pub use pallet::*;
 
-mod adapt_price;
 mod benchmarking;
-mod core_mask;
 mod coretime_interface;
 mod dispatchable_impls;
 mod market;
@@ -35,7 +33,7 @@ mod test_fungibles;
 mod tests;
 mod tick_impls;
 mod types;
-mod utility_impls;
+pub(crate) mod utility_impls;
 
 pub mod migration;
 pub mod runtime_api;
@@ -43,10 +41,8 @@ pub mod runtime_api;
 pub mod weights;
 pub use weights::WeightInfo;
 
-pub use adapt_price::*;
-pub use core_mask::*;
+pub use sp_coretime::*;
 pub use coretime_interface::*;
-pub use market::*;
 pub use types::*;
 
 extern crate alloc;

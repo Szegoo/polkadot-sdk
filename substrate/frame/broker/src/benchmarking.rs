@@ -1320,7 +1320,7 @@ mod benches {
 		Status::<T>::put(status.clone());
 
 		let block = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
-		let reserved_cores = <Broker<T> as Market<T>>::CoreCount::reserved_core_count();
+		let reserved_cores = <Broker<T> as Market>::CoreCount::reserved_core_count();
 		let (new_prices, new_sale) =
 			market::rotate_sale::<T>(&sale, &config, &status, reserved_cores, block);
 		SaleInfo::<T>::put(new_sale.clone());

@@ -53,8 +53,6 @@ pub mod pallet {
 	pub type SaleInfo<T> = StorageValue<_, SaleInfoRecordOf<T>, OptionQuery>;
 }
 
-// --- Market implementation ---
-
 impl<T: Config> Market<T> for Pallet<T> {
 	type Error = MarketError;
 	type BidId = ();

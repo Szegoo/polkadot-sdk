@@ -17,175 +17,30 @@
 
 use core::cmp;
 use frame_support::{ensure, weights::WeightMeter};
-use frame_system::pallet_prelude::AccountIdFor;
 use sp_arithmetic::FixedPointNumber;
 use sp_core::Get;
-use sp_runtime::{traits::Zero, DispatchError, FixedU64, SaturatedConversion, Saturating};
+use sp_runtime::{traits::Zero, FixedU64, SaturatedConversion, Saturating};
 
 use crate::{
 	utility_impls::CoreCountProviderImpl, weights::WeightInfo, AdaptPrice, AdaptedPrices,
-	BalanceOf, BidIdOf, Config, ConfigRecordOf, Configuration, CoreIndex, CoreMask, Pallet,
-	PotentialRenewalId, RegionId, RelayBlockNumberOf, SaleInfo, SaleInfoRecord, SaleInfoRecordOf,
-	SalePerformance, Status, StatusRecord, Timeslice,
+	BalanceOf, BidIdOf, CloseBidResult, Config, ConfigRecordOf, Configuration, CoreCountProvider,
+	CoreIndex, CoreMask, Market, MarketError, OrderResult, Pallet, PotentialRenewalId, RegionId,
+	RelayBlockNumberOf, RenewalOrderResult, SaleInfo, SaleInfoRecord, SaleInfoRecordOf,
+	SalePerformance, SalesStarted, Status, StatusRecord, TickAction, Timeslice,
 };
 
-// TODO: Extend the documentation.
+/// Type alias for TickAction with concrete pallet types.
+pub(crate) type TickActionOf<T> = TickAction<
+	BalanceOf<T>,
+	RelayBlockNumberOf<T>,
+	<T as frame_system::Config>::AccountId,
+	BidIdOf<T>,
+>;
 
-/// Trait representig generic market logic.
-///
-/// The assumptions for this generic market are:
-/// - Every order will either create a bid or will be resolved immediately.
-/// - There're two types of orders: bulk coretime purchase and bulk coretime renewal.
-/// - Coretime regions are fungible.
-pub trait Market<T: Config> {
-	type Error: Into<DispatchError>;
-	/// Unique ID assigned to every bid.
-	type BidId;
-	type CoreCount: CoreCountProvider<T>;
-
-	// TODO: Unify the interface.
-	fn start_sales(
-		block_number: RelayBlockNumberOf<T>,
-		end_price: BalanceOf<T>,
-		core_count: CoreIndex,
-	) -> Result<SalesStarted<T>, Self::Error>;
-
-	/// Place an order for one bulk coretime region purchase.
-	///
-	/// This method may or may not create a bid, according to the market rules.
-	///
-	/// - `price_limit` - maximum price which the buyer is willing to pay
-	fn place_order(
-		block_number: RelayBlockNumberOf<T>,
-		who: &T::AccountId,
-		price_limit: BalanceOf<T>,
-	) -> Result<OrderResult<T, Self::BidId>, Self::Error>;
-
-	/// Place an order for bulk coretime renewal.
-	///
-	/// This method may or may not create a bid, according to the market rules.
-	fn place_renewal_order(
-		block_number: RelayBlockNumberOf<T>,
-		who: &T::AccountId,
-		renewal: PotentialRenewalId,
-		recorded_price: BalanceOf<T>,
-	) -> Result<RenewalOrderResult<T, Self::BidId>, Self::Error>;
-
-	/// Close the bid given its `BidId`.
-	///
-	/// If the market logic allows creating the bids this method allows to close any bids (either
-	/// forcefully if `maybe_check_owner` is `None` or checking the bid owner if it's `Some`).
-	fn close_bid(
-		id: Self::BidId,
-		maybe_check_owner: Option<T::AccountId>,
-	) -> Result<CloseBidResult<T>, Self::Error>;
-
-	/// Logic that gets called in `on_initialize` hook.
-	fn tick(
-		now: RelayBlockNumberOf<T>,
-		weight_meter: &mut WeightMeter,
-	) -> Vec<TickAction<T, Self::BidId>>;
-}
-
-pub trait CoreCountProvider<T: Config> {
-	fn reserved_core_count() -> CoreIndex;
-}
-
-pub enum OrderResult<T: Config, BidId> {
-	BidPlaced { id: BidId, bid_price: BalanceOf<T> },
-	Sold { price: BalanceOf<T>, region_id: RegionId, region_end: Timeslice },
-}
-
-pub enum RenewalOrderResult<T: Config, BidId> {
-	BidPlaced {
-		id: BidId,
-		bid_price: BalanceOf<T>,
-	},
-	Sold {
-		price: BalanceOf<T>,
-		next_renewal_price: BalanceOf<T>,
-		region_id: RegionId,
-		effective_to: Timeslice,
-	},
-}
-
-pub struct CloseBidResult<T: Config> {
-	pub owner: T::AccountId,
-	pub refund: BalanceOf<T>,
-}
-
-// TODO: Don't pass BidId as a separate generic.
-pub enum TickAction<T: Config, BidId> {
-	SellRegion {
-		owner: T::AccountId,
-		/// How much was paid for this region in total.
-		paid: BalanceOf<T>,
-		region_id: RegionId,
-		region_end: Timeslice,
-	},
-	RenewRegion {
-		owner: T::AccountId,
-		renewal_id: PotentialRenewalId,
-	},
-	Refund {
-		amount: BalanceOf<T>,
-		who: T::AccountId,
-	},
-	BidClosed {
-		id: BidId,
-		owner: T::AccountId,
-	},
-	SaleRotated {
-		old_sale: SaleInfoRecordOf<T>,
-		new_sale: SaleInfoRecordOf<T>,
-		new_prices: AdaptedPrices<BalanceOf<T>>,
-		// TODO: Deprecate it as it doesn't fit into the general market impl but used when emitting
-		// an event.
-		start_price: BalanceOf<T>,
-	},
-	TimesliceCommited {
-		timeslice: Timeslice,
-	},
-	LastTimesliceChanged {
-		last_timeslice: Timeslice,
-		rc_block: RelayBlockNumberOf<T>,
-	},
-}
-
-pub struct SalesStarted<T: Config> {
-	pub imaginary_old_sale: SaleInfoRecordOf<T>,
-	pub new_sale: SaleInfoRecordOf<T>,
-	pub new_prices: AdaptedPrices<BalanceOf<T>>,
-	// TODO: Deprecate it as it doesn't fit into the general market impl but used when emitting
-	// an event.
-	pub start_price: BalanceOf<T>,
-}
-
-pub enum MarketError {
-	NoSales,
-	Overpriced,
-	BidNotExist,
-	Uninitialized,
-	TooEarly,
-	Unavailable,
-	SoldOut,
-}
-
-impl From<MarketError> for DispatchError {
-	fn from(value: MarketError) -> Self {
-		match value {
-			MarketError::NoSales => Self::Other("NoSales"),
-			MarketError::Overpriced => Self::Other("Overpriced"),
-			MarketError::BidNotExist => Self::Other("BidNotExist"),
-			MarketError::Uninitialized => Self::Other("Uninitialized"),
-			MarketError::TooEarly => Self::Other("TooEarly"),
-			MarketError::Unavailable => Self::Other("Unavailable"),
-			MarketError::SoldOut => Self::Other("SoldOut"),
-		}
-	}
-}
-
-impl<T: Config> Market<T> for Pallet<T> {
+impl<T: Config> Market for Pallet<T> {
+	type AccountId = T::AccountId;
+	type Balance = BalanceOf<T>;
+	type BlockNumber = RelayBlockNumberOf<T>;
 	type Error = MarketError;
 	/// Must be unique.
 	type BidId = ();
@@ -195,7 +50,7 @@ impl<T: Config> Market<T> for Pallet<T> {
 		block_number: RelayBlockNumberOf<T>,
 		end_price: BalanceOf<T>,
 		core_count: u16,
-	) -> Result<SalesStarted<T>, Self::Error> {
+	) -> Result<SalesStarted<BalanceOf<T>, RelayBlockNumberOf<T>>, Self::Error> {
 		let config = Configuration::<T>::get().ok_or(MarketError::Uninitialized)?;
 
 		let commit_timeslice = latest_timeslice_ready_to_commit::<T>(block_number, &config);
@@ -234,9 +89,9 @@ impl<T: Config> Market<T> for Pallet<T> {
 
 	fn place_order(
 		block_number: RelayBlockNumberOf<T>,
-		_who: &AccountIdFor<T>,
+		_who: &T::AccountId,
 		price_limit: BalanceOf<T>,
-	) -> Result<OrderResult<T, Self::BidId>, Self::Error> {
+	) -> Result<OrderResult<BalanceOf<T>, Self::BidId>, Self::Error> {
 		let mut sale = SaleInfo::<T>::get().ok_or(MarketError::NoSales)?;
 		let status = Status::<T>::get().ok_or(MarketError::Uninitialized)?;
 
@@ -261,10 +116,10 @@ impl<T: Config> Market<T> for Pallet<T> {
 
 	fn place_renewal_order(
 		block_number: RelayBlockNumberOf<T>,
-		_who: &AccountIdFor<T>,
+		_who: &T::AccountId,
 		_renewal: PotentialRenewalId,
 		recorded_price: BalanceOf<T>,
-	) -> Result<RenewalOrderResult<T, Self::BidId>, Self::Error> {
+	) -> Result<RenewalOrderResult<BalanceOf<T>, Self::BidId>, Self::Error> {
 		let config = Configuration::<T>::get().ok_or(MarketError::Uninitialized)?;
 		let status = Status::<T>::get().ok_or(MarketError::Uninitialized)?;
 		let mut sale = SaleInfo::<T>::get().ok_or(MarketError::NoSales)?;
@@ -292,21 +147,21 @@ impl<T: Config> Market<T> for Pallet<T> {
 
 	fn close_bid(
 		_id: Self::BidId,
-		_maybe_check_owner: Option<AccountIdFor<T>>,
-	) -> Result<CloseBidResult<T>, Self::Error> {
+		_maybe_check_owner: Option<T::AccountId>,
+	) -> Result<CloseBidResult<T::AccountId, BalanceOf<T>>, Self::Error> {
 		Err(MarketError::BidNotExist)
 	}
 
 	fn tick(
 		block_number: RelayBlockNumberOf<T>,
 		weight_meter: &mut WeightMeter,
-	) -> Vec<TickAction<T, Self::BidId>> {
+	) -> alloc::vec::Vec<TickActionOf<T>> {
 		let (Some(config), Some(mut status)) = (Configuration::<T>::get(), Status::<T>::get())
 		else {
-			return vec![];
+			return alloc::vec![];
 		};
 
-		let mut actions = vec![];
+		let mut actions = alloc::vec![];
 
 		if let Some(commit_timeslice) =
 			next_timeslice_to_commit::<T>(block_number, &config, &status)
@@ -316,7 +171,7 @@ impl<T: Config> Market<T> for Pallet<T> {
 			if let Some(sale) = SaleInfo::<T>::get() {
 				if commit_timeslice >= sale.region_begin {
 					weight_meter.consume(T::WeightInfo::market_sale_rotated());
-					sale_rotated::<T, Self>(sale, &config, &status, block_number, &mut actions);
+					sale_rotated::<T>(sale, &config, &status, block_number, &mut actions);
 				}
 			}
 
@@ -326,7 +181,7 @@ impl<T: Config> Market<T> for Pallet<T> {
 		let current_timeslice = current_timeslice::<T>(block_number);
 		if status.last_timeslice < current_timeslice {
 			weight_meter.consume(T::WeightInfo::market_last_timeslice_changed());
-			last_timeslice_changed(&mut status, &mut actions);
+			last_timeslice_changed::<T>(&mut status, &mut actions);
 		}
 
 		Status::<T>::put(status);
@@ -337,7 +192,7 @@ impl<T: Config> Market<T> for Pallet<T> {
 
 pub(crate) fn last_timeslice_changed<T: Config>(
 	status: &mut StatusRecord,
-	actions: &mut Vec<TickAction<T, BidIdOf<T>>>,
+	actions: &mut alloc::vec::Vec<TickActionOf<T>>,
 ) {
 	status.last_timeslice.saturating_inc();
 	let rc_block = T::TimeslicePeriod::get() * status.last_timeslice.into();
@@ -346,14 +201,14 @@ pub(crate) fn last_timeslice_changed<T: Config>(
 		.push(TickAction::LastTimesliceChanged { last_timeslice: status.last_timeslice, rc_block });
 }
 
-pub(crate) fn sale_rotated<T: Config, M: Market<T>>(
+pub(crate) fn sale_rotated<T: Config>(
 	sale: SaleInfoRecordOf<T>,
 	config: &ConfigRecordOf<T>,
 	status: &StatusRecord,
 	block_number: RelayBlockNumberOf<T>,
-	actions: &mut Vec<TickAction<T, BidIdOf<T>>>,
+	actions: &mut alloc::vec::Vec<TickActionOf<T>>,
 ) {
-	let reserved_cores = M::CoreCount::reserved_core_count();
+	let reserved_cores = <Pallet<T> as Market>::CoreCount::reserved_core_count();
 	let (new_prices, new_sale) =
 		rotate_sale::<T>(&sale, config, status, reserved_cores, block_number);
 	SaleInfo::<T>::put(&new_sale);

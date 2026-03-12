@@ -266,9 +266,9 @@ pub enum SalePhase {
 pub struct SaleInfoRecord<Balance, BlockNumber> {
 	/// The relay block number at which the sale will/did start.
 	pub sale_start: BlockNumber,
-	/// The length in blocks of the Market Period (where the price is decreasing).
-	pub market_period_length: BlockNumber,
-	/// The price of Bulk Coretime after the Market Period (reserve/floor price).
+	/// The length in blocks of the Leadin Period (where the price is decreasing).
+	pub leadin_length: BlockNumber,
+	/// The price of Bulk Coretime after the Leadin Period.
 	pub end_price: Balance,
 	/// The first timeslice of the Regions which are being sold in this sale.
 	pub region_begin: Timeslice,
@@ -299,11 +299,10 @@ pub struct ConfigRecord<BlockNumber> {
 	/// The number of Relay-chain blocks in advance which scheduling should be fixed and the
 	/// `Coretime::assign` API used to inform the Relay-chain.
 	pub advance_notice: BlockNumber,
-	/// The length in blocks of the Market Period for forthcoming sales (descending Dutch
-	/// auction).
-	pub market_period_length: BlockNumber,
-	/// The length in blocks of the Renewal Period for forthcoming sales.
-	pub renewal_period_length: BlockNumber,
+	/// The length in blocks of the Interlude Period for forthcoming sales.
+	pub interlude_length: BlockNumber,
+	/// The length in blocks of the Leadin Period for forthcoming sales.
+	pub leadin_length: BlockNumber,
 	/// The length in timeslices of Regions which are up for sale in forthcoming sales.
 	pub region_length: Timeslice,
 	/// The proportion of cores available for sale which should be sold.
@@ -327,7 +326,7 @@ where
 {
 	/// Check the config for basic validity constraints.
 	pub fn validate(&self) -> Result<(), ()> {
-		if self.market_period_length.is_zero() {
+		if self.leadin_length.is_zero() {
 			return Err(());
 		}
 

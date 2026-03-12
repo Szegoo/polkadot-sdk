@@ -18,46 +18,14 @@
 #![deny(missing_docs)]
 
 use alloc::vec::Vec;
-use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
+use codec::{Decode, Encode, MaxEncodedLen};
 use core::fmt::Debug;
 use frame_support::Parameter;
 use scale_info::TypeInfo;
 use sp_arithmetic::traits::AtLeast32BitUnsigned;
 use sp_runtime::traits::BlockNumberProvider;
 
-use crate::Timeslice;
-
-/// Index of a Polkadot Core.
-pub type CoreIndex = u16;
-
-/// A Task Id. In general this is called a ParachainId.
-pub type TaskId = u32;
-
-/// Fraction expressed as a nominator with an assumed denominator of 57,600.
-pub type PartsOf57600 = u16;
-
-/// An element to which a core can be assigned.
-#[derive(
-	Encode,
-	Decode,
-	DecodeWithMemTracking,
-	Clone,
-	Eq,
-	PartialEq,
-	Ord,
-	PartialOrd,
-	Debug,
-	TypeInfo,
-	MaxEncodedLen,
-)]
-pub enum CoreAssignment {
-	/// Core need not be used for anything.
-	Idle,
-	/// Core should be used for the Instantaneous Coretime Pool.
-	Pool,
-	/// Core should be used to process the given task.
-	Task(TaskId),
-}
+use crate::{CoreAssignment, CoreIndex, PartsOf57600, Timeslice};
 
 /// Relay chain block number of `T` that implements [`CoretimeInterface`].
 pub type RCBlockNumberOf<T> = <RCBlockNumberProviderOf<T> as BlockNumberProvider>::BlockNumber;

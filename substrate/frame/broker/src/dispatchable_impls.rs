@@ -115,7 +115,7 @@ impl<T: Config> Pallet<T> {
 		Self::do_request_core_count(core_count)?;
 
 		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
-		let sales_started = <Self as Market<T>>::start_sales(now, end_price, core_count)?;
+		let sales_started = <Self as Market>::start_sales(now, end_price, core_count)?;
 
 		Self::deposit_event(Event::<T>::SalesStarted { price: end_price, core_count });
 

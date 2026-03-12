@@ -124,14 +124,14 @@ impl<T: Config> Pallet<T> {
 
 	pub(crate) fn process_market_logic(meter: &mut WeightMeter) {
 		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
-		let result = <Self as Market<T>>::tick(now, meter);
+		let result = <Self as Market>::tick(now, meter);
 
 		for action in result {
 			Self::process_tick_action(action, meter);
 		}
 	}
 
-	pub(crate) fn process_tick_action(action: TickAction<T, BidIdOf<T>>, meter: &mut WeightMeter) {
+	pub(crate) fn process_tick_action(action: crate::market::TickActionOf<T>, meter: &mut WeightMeter) {
 		match action {
 			TickAction::BidClosed { id, owner } => {
 				meter.consume(T::WeightInfo::process_tick_action_bid_closed());
