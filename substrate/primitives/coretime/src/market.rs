@@ -33,6 +33,7 @@ pub trait CoreCountProvider {
 }
 
 /// Errors specific to market operations.
+#[derive(Debug)]
 pub enum MarketError {
 	NoSales,
 	Overpriced,
@@ -120,6 +121,7 @@ pub enum TickAction<Balance, BlockNumber, AccountId, BidId> {
 }
 
 /// Data returned when sales are first started.
+#[derive(Debug)]
 pub struct SalesStarted<Balance, BlockNumber> {
 	pub imaginary_old_sale: SaleInfoRecord<Balance, BlockNumber>,
 	pub new_sale: SaleInfoRecord<Balance, BlockNumber>,

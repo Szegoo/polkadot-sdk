@@ -19,6 +19,11 @@
 
 pub use pallet::*;
 
+#[cfg(test)]
+mod mock;
+#[cfg(test)]
+mod tests;
+
 extern crate alloc;
 
 use alloc::{vec, vec::Vec};
