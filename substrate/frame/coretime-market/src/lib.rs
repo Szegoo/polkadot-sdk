@@ -54,15 +54,10 @@ type TickActionOf<T> =
 
 pub trait WeightInfo {
 	fn market_sale_rotated() -> Weight;
-	fn market_last_timeslice_changed() -> Weight;
 }
 
 impl WeightInfo for () {
 	fn market_sale_rotated() -> Weight {
-		Weight::zero()
-	}
-
-	fn market_last_timeslice_changed() -> Weight {
 		Weight::zero()
 	}
 }
@@ -219,52 +214,31 @@ impl<T: Config> Market for Pallet<T> {
 		block_number: RelayBlockNumberOf<T>,
 		weight_meter: &mut WeightMeter,
 	) -> Vec<TickActionOf<T>> {
-		let (Some(config), Some(mut status)) = (Configuration::<T>::get(), Status::<T>::get())
-		else {
+		let (Some(config), Some(status)) = (Configuration::<T>::get(), Status::<T>::get()) else {
 			return vec![];
 		};
 
 		let mut actions = vec![];
 
-		if let Some(commit_timeslice) =
-			next_timeslice_to_commit::<T>(block_number, &config, &status)
-		{
-			status.last_committed_timeslice = commit_timeslice;
+		// Check if a sale rotation is needed based on the current committed timeslice.
+		if let Some(sale) = SaleInfo::<T>::get() {
+			if status.last_committed_timeslice >= sale.region_begin {
+				weight_meter.consume(T::WeightInfo::market_sale_rotated());
 
-			if let Some(sale) = SaleInfo::<T>::get() {
-				if commit_timeslice >= sale.region_begin {
-					weight_meter.consume(T::WeightInfo::market_sale_rotated());
+				let reserved_cores = Self::CoreCount::reserved_core_count();
+				let (new_prices, new_sale) =
+					rotate_sale::<T>(&sale, &config, &status, reserved_cores, block_number);
+				SaleInfo::<T>::put(&new_sale);
 
-					let reserved_cores = Self::CoreCount::reserved_core_count();
-					let (new_prices, new_sale) =
-						rotate_sale::<T>(&sale, &config, &status, reserved_cores, block_number);
-					SaleInfo::<T>::put(&new_sale);
-
-					let start_price = sell_price::<T>(block_number, &new_sale);
-					actions.push(TickAction::SaleRotated {
-						old_sale: sale,
-						new_sale,
-						new_prices,
-						start_price,
-					});
-				}
+				let start_price = sell_price::<T>(block_number, &new_sale);
+				actions.push(TickAction::SaleRotated {
+					old_sale: sale,
+					new_sale,
+					new_prices,
+					start_price,
+				});
 			}
-
-			actions.push(TickAction::TimesliceCommited { timeslice: commit_timeslice });
 		}
-
-		let current_timeslice = current_timeslice::<T>(block_number);
-		if status.last_timeslice < current_timeslice {
-			weight_meter.consume(T::WeightInfo::market_last_timeslice_changed());
-			status.last_timeslice.saturating_inc();
-			let rc_block = T::TimeslicePeriod::get() * status.last_timeslice.into();
-			actions.push(TickAction::LastTimesliceChanged {
-				last_timeslice: status.last_timeslice,
-				rc_block,
-			});
-		}
-
-		Status::<T>::put(status);
 
 		actions
 	}
@@ -326,18 +300,6 @@ fn leadin_factor_at(when: FixedU64) -> FixedU64 {
 fn current_timeslice<T: Config>(now: RelayBlockNumberOf<T>) -> Timeslice {
 	let timeslice_period = T::TimeslicePeriod::get();
 	(now / timeslice_period).saturated_into()
-}
-
-fn next_timeslice_to_commit<T: Config>(
-	now: RelayBlockNumberOf<T>,
-	config: &ConfigRecordOf<T>,
-	status: &StatusRecord,
-) -> Option<Timeslice> {
-	if status.last_committed_timeslice < latest_timeslice_ready_to_commit::<T>(now, config) {
-		Some(status.last_committed_timeslice + 1)
-	} else {
-		None
-	}
 }
 
 fn latest_timeslice_ready_to_commit<T: Config>(

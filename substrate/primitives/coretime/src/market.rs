@@ -111,13 +111,6 @@ pub enum TickAction<Balance, BlockNumber, AccountId, BidId> {
 		new_prices: AdaptedPrices<Balance>,
 		start_price: Balance,
 	},
-	TimesliceCommited {
-		timeslice: Timeslice,
-	},
-	LastTimesliceChanged {
-		last_timeslice: Timeslice,
-		rc_block: BlockNumber,
-	},
 }
 
 /// Data returned when sales are first started.
