@@ -146,10 +146,6 @@ pub enum TickAction<T: Config, BidId> {
 	TimesliceCommited {
 		timeslice: Timeslice,
 	},
-	LastTimesliceChanged {
-		last_timeslice: Timeslice,
-		rc_block: RelayBlockNumberOf<T>,
-	},
 }
 
 pub struct SalesStarted<T: Config> {
@@ -248,7 +244,7 @@ impl<T: Config> Market<T> for Pallet<T> {
 		let sell_price = sell_price::<T>(block_number, &sale);
 
 		if price_limit < sell_price {
-			return Err(MarketError::Overpriced)
+			return Err(MarketError::Overpriced);
 		};
 
 		let core = purchase_core::<T>(sell_price, &mut sale);
@@ -287,7 +283,7 @@ impl<T: Config> Market<T> for Pallet<T> {
 			next_renewal_price,
 			region_id,
 			effective_to: sale.region_end,
-		})
+		});
 	}
 
 	fn close_bid(
@@ -323,27 +319,10 @@ impl<T: Config> Market<T> for Pallet<T> {
 			actions.push(TickAction::TimesliceCommited { timeslice: commit_timeslice });
 		}
 
-		let current_timeslice = current_timeslice::<T>(block_number);
-		if status.last_timeslice < current_timeslice {
-			weight_meter.consume(T::WeightInfo::market_last_timeslice_changed());
-			last_timeslice_changed(&mut status, &mut actions);
-		}
-
 		Status::<T>::put(status);
 
 		actions
 	}
-}
-
-pub(crate) fn last_timeslice_changed<T: Config>(
-	status: &mut StatusRecord,
-	actions: &mut Vec<TickAction<T, BidIdOf<T>>>,
-) {
-	status.last_timeslice.saturating_inc();
-	let rc_block = T::TimeslicePeriod::get() * status.last_timeslice.into();
-
-	actions
-		.push(TickAction::LastTimesliceChanged { last_timeslice: status.last_timeslice, rc_block });
 }
 
 pub(crate) fn sale_rotated<T: Config, M: Market<T>>(

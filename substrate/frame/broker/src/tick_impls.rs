@@ -46,11 +46,17 @@ impl<T: Config> Pallet<T> {
 			meter.consume(T::WeightInfo::process_core_count(status.core_count.into()));
 		}
 
-		Status::<T>::put(&status);
-
 		if Self::process_revenue() {
 			meter.consume(T::WeightInfo::process_revenue());
 		}
+
+		if status.last_timeslice < Self::current_timeslice() {
+			// TODO: Consume weight.
+			status.last_timeslice.saturating_inc();
+			Self::last_timeslice_changed(&status, &mut meter);
+		}
+
+		Status::<T>::put(status);
 
 		Self::process_market_logic(&mut meter);
 
@@ -122,6 +128,15 @@ impl<T: Config> Pallet<T> {
 		true
 	}
 
+	fn last_timeslice_changed(status: &StatusRecord, meter: &mut WeightMeter) {
+		let rc_block = T::TimeslicePeriod::get() * status.last_timeslice.into();
+		T::Coretime::request_revenue_info_at(rc_block);
+		meter.consume(T::WeightInfo::request_revenue_info_at());
+
+		T::Coretime::on_new_timeslice(status.last_timeslice);
+		meter.consume(T::WeightInfo::on_new_timeslice());
+	}
+
 	pub(crate) fn process_market_logic(meter: &mut WeightMeter) {
 		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
 		let result = <Self as Market<T>>::tick(now, meter);
@@ -191,12 +206,6 @@ impl<T: Config> Pallet<T> {
 					// Consume for the storage read.
 					meter.consume(T::WeightInfo::process_tick_action_timeslice_commited(0));
 				}
-			},
-			TickAction::LastTimesliceChanged { last_timeslice, rc_block } => {
-				T::Coretime::request_revenue_info_at(rc_block);
-				meter.consume(T::WeightInfo::request_revenue_info_at());
-				T::Coretime::on_new_timeslice(last_timeslice);
-				meter.consume(T::WeightInfo::on_new_timeslice());
 			},
 		}
 	}
