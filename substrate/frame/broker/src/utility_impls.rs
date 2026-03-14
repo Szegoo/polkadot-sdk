@@ -159,3 +159,15 @@ impl<T: Config> CoreCountProvider<T> for CoreCountProviderImpl<T> {
 			Leases::<T>::decode_len().unwrap_or_default() as CoreIndex
 	}
 }
+
+pub struct TimesliceProviderImpl<T: Config>(PhantomData<T>);
+
+impl<T: Config> TimesliceProvider for TimesliceProviderImpl<T> {
+	fn next_timeslice_to_commit() -> Option<Timeslice> {
+		if let (Some(status), Some(config)) = (Status::<T>::get(), Configuration::<T>::get()) {
+			Pallet::<T>::next_timeslice_to_commit(&config, &status)
+		} else {
+			None
+		}
+	}
+}

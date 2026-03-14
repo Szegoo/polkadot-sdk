@@ -38,7 +38,8 @@ impl<T: Config> Pallet<T> {
 		let mut meter = WeightMeter::new();
 		meter.consume(T::WeightInfo::do_tick_base());
 
-		let Some(mut status) = Status::<T>::get() else {
+		let (Some(mut status), Some(config)) = (Status::<T>::get(), Configuration::<T>::get())
+		else {
 			return meter.consumed();
 		};
 
@@ -59,6 +60,15 @@ impl<T: Config> Pallet<T> {
 		Status::<T>::put(status);
 
 		Self::process_market_logic(&mut meter);
+
+		// TODO: Consume weight.
+		if let Some(mut status) = Status::<T>::get() {
+			if let Some(commit_timeslice) = Self::next_timeslice_to_commit(&config, &status) {
+				status.last_committed_timeslice = commit_timeslice;
+				Self::timeslice_commited(&mut status);
+			}
+			Status::<T>::put(status);
+		}
 
 		meter.consumed()
 	}
@@ -137,6 +147,17 @@ impl<T: Config> Pallet<T> {
 		meter.consume(T::WeightInfo::on_new_timeslice());
 	}
 
+	fn timeslice_commited(status: &mut StatusRecord) {
+		Self::process_pool(status.last_committed_timeslice, status);
+
+		let timeslice_period = T::TimeslicePeriod::get();
+		let rc_begin =
+			RelayBlockNumberOf::<T>::from(status.last_committed_timeslice) * timeslice_period;
+		for core in 0..status.core_count {
+			Self::process_core_schedule(status.last_committed_timeslice, rc_begin, core);
+		}
+	}
+
 	pub(crate) fn process_market_logic(meter: &mut WeightMeter) {
 		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
 		let result = <Self as Market<T>>::tick(now, meter);
@@ -185,26 +206,6 @@ impl<T: Config> Pallet<T> {
 				} else {
 					// Consume for the storage read.
 					meter.consume(T::WeightInfo::process_tick_action_sale_rotated(0));
-				}
-			},
-			TickAction::TimesliceCommited { timeslice } => {
-				if let Some(mut status) = Status::<T>::get() {
-					meter.consume(T::WeightInfo::process_tick_action_timeslice_commited(
-						status.core_count.into(),
-					));
-
-					Self::process_pool(timeslice, &mut status);
-
-					let timeslice_period = T::TimeslicePeriod::get();
-					let rc_begin = RelayBlockNumberOf::<T>::from(timeslice) * timeslice_period;
-					for core in 0..status.core_count {
-						Self::process_core_schedule(timeslice, rc_begin, core);
-					}
-
-					Status::<T>::put(status);
-				} else {
-					// Consume for the storage read.
-					meter.consume(T::WeightInfo::process_tick_action_timeslice_commited(0));
 				}
 			},
 		}

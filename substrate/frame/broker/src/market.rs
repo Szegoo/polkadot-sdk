@@ -23,10 +23,11 @@ use sp_core::Get;
 use sp_runtime::{traits::Zero, DispatchError, FixedU64, SaturatedConversion, Saturating};
 
 use crate::{
-	utility_impls::CoreCountProviderImpl, weights::WeightInfo, AdaptPrice, AdaptedPrices,
-	BalanceOf, BidIdOf, Config, ConfigRecordOf, Configuration, CoreIndex, CoreMask, Pallet,
-	PotentialRenewalId, RegionId, RelayBlockNumberOf, SaleInfo, SaleInfoRecord, SaleInfoRecordOf,
-	SalePerformance, Status, StatusRecord, Timeslice,
+	utility_impls::{CoreCountProviderImpl, TimesliceProviderImpl},
+	weights::WeightInfo,
+	AdaptPrice, AdaptedPrices, BalanceOf, BidIdOf, Config, ConfigRecordOf, Configuration,
+	CoreIndex, CoreMask, Pallet, PotentialRenewalId, RegionId, RelayBlockNumberOf, SaleInfo,
+	SaleInfoRecord, SaleInfoRecordOf, SalePerformance, Status, StatusRecord, Timeslice,
 };
 
 // TODO: Extend the documentation.
@@ -42,6 +43,7 @@ pub trait Market<T: Config> {
 	/// Unique ID assigned to every bid.
 	type BidId;
 	type CoreCount: CoreCountProvider<T>;
+	type TimesliceProvider: TimesliceProvider;
 
 	// TODO: Unify the interface.
 	fn start_sales(
@@ -89,6 +91,10 @@ pub trait Market<T: Config> {
 
 pub trait CoreCountProvider<T: Config> {
 	fn reserved_core_count() -> CoreIndex;
+}
+
+pub trait TimesliceProvider {
+	fn next_timeslice_to_commit() -> Option<Timeslice>;
 }
 
 pub enum OrderResult<T: Config, BidId> {
@@ -143,9 +149,6 @@ pub enum TickAction<T: Config, BidId> {
 		// an event.
 		start_price: BalanceOf<T>,
 	},
-	TimesliceCommited {
-		timeslice: Timeslice,
-	},
 }
 
 pub struct SalesStarted<T: Config> {
@@ -186,6 +189,7 @@ impl<T: Config> Market<T> for Pallet<T> {
 	/// Must be unique.
 	type BidId = ();
 	type CoreCount = CoreCountProviderImpl<T>;
+	type TimesliceProvider = TimesliceProviderImpl<T>;
 
 	fn start_sales(
 		block_number: RelayBlockNumberOf<T>,
@@ -297,29 +301,20 @@ impl<T: Config> Market<T> for Pallet<T> {
 		block_number: RelayBlockNumberOf<T>,
 		weight_meter: &mut WeightMeter,
 	) -> Vec<TickAction<T, Self::BidId>> {
-		let (Some(config), Some(mut status)) = (Configuration::<T>::get(), Status::<T>::get())
-		else {
+		let (Some(config), Some(status)) = (Configuration::<T>::get(), Status::<T>::get()) else {
 			return vec![];
 		};
 
 		let mut actions = vec![];
 
-		if let Some(commit_timeslice) =
-			next_timeslice_to_commit::<T>(block_number, &config, &status)
-		{
-			status.last_committed_timeslice = commit_timeslice;
-
+		if let Some(timeslice) = Self::TimesliceProvider::next_timeslice_to_commit() {
 			if let Some(sale) = SaleInfo::<T>::get() {
-				if commit_timeslice >= sale.region_begin {
+				if timeslice >= sale.region_begin {
 					weight_meter.consume(T::WeightInfo::market_sale_rotated());
 					sale_rotated::<T, Self>(sale, &config, &status, block_number, &mut actions);
 				}
 			}
-
-			actions.push(TickAction::TimesliceCommited { timeslice: commit_timeslice });
-		}
-
-		Status::<T>::put(status);
+		};
 
 		actions
 	}
