@@ -16,7 +16,7 @@
 // limitations under the License.
 
 use core::cmp;
-use frame_support::{ensure, weights::WeightMeter};
+use frame_support::{ensure, inherent::MakeFatalError, weights::WeightMeter};
 use frame_system::pallet_prelude::AccountIdFor;
 use sp_arithmetic::FixedPointNumber;
 use sp_core::Get;
@@ -49,7 +49,6 @@ pub trait Market<T: Config> {
 	fn start_sales(
 		block_number: RelayBlockNumberOf<T>,
 		end_price: BalanceOf<T>,
-		core_count: CoreIndex,
 	) -> Result<SalesStarted<T>, Self::Error>;
 
 	/// Place an order for one bulk coretime region purchase.
@@ -91,6 +90,8 @@ pub trait Market<T: Config> {
 
 pub trait CoreCountProvider<T: Config> {
 	fn reserved_core_count() -> CoreIndex;
+
+	fn core_count() -> Option<CoreIndex>;
 }
 
 pub trait TimesliceProvider {
@@ -165,6 +166,7 @@ pub enum MarketError {
 	Overpriced,
 	BidNotExist,
 	Uninitialized,
+	CoreCountUnknown,
 	TooEarly,
 	Unavailable,
 	SoldOut,
@@ -177,6 +179,7 @@ impl From<MarketError> for DispatchError {
 			MarketError::Overpriced => Self::Other("Overpriced"),
 			MarketError::BidNotExist => Self::Other("BidNotExist"),
 			MarketError::Uninitialized => Self::Other("Uninitialized"),
+			MarketError::CoreCountUnknown => Self::Other("CoreCountUnknown"),
 			MarketError::TooEarly => Self::Other("TooEarly"),
 			MarketError::Unavailable => Self::Other("Unavailable"),
 			MarketError::SoldOut => Self::Other("SoldOut"),
@@ -194,18 +197,11 @@ impl<T: Config> Market<T> for Pallet<T> {
 	fn start_sales(
 		block_number: RelayBlockNumberOf<T>,
 		end_price: BalanceOf<T>,
-		core_count: u16,
 	) -> Result<SalesStarted<T>, Self::Error> {
 		let config = Configuration::<T>::get().ok_or(MarketError::Uninitialized)?;
 
 		let commit_timeslice = latest_timeslice_ready_to_commit::<T>(block_number, &config);
-		let status = StatusRecord {
-			core_count,
-			private_pool_size: 0,
-			system_pool_size: 0,
-			last_committed_timeslice: commit_timeslice.saturating_sub(1),
-			last_timeslice: current_timeslice::<T>(block_number),
-		};
+
 		// Imaginary old sale for bootstrapping the first actual sale:
 		let old_sale = SaleInfoRecord {
 			sale_start: block_number,
@@ -221,11 +217,10 @@ impl<T: Config> Market<T> for Pallet<T> {
 		};
 
 		let reserved_cores = Self::CoreCount::reserved_core_count();
+		let core_count = Self::CoreCount::core_count().ok_or(MarketError::CoreCountUnknown)?;
 		let (new_prices, new_sale) =
-			rotate_sale::<T>(&old_sale, &config, &status, reserved_cores, block_number);
+			rotate_sale::<T>(&old_sale, &config, core_count, reserved_cores, block_number);
 		SaleInfo::<T>::put(&new_sale);
-
-		Status::<T>::put(&status);
 
 		let start_price = sell_price::<T>(block_number, &new_sale);
 
@@ -238,9 +233,9 @@ impl<T: Config> Market<T> for Pallet<T> {
 		price_limit: BalanceOf<T>,
 	) -> Result<OrderResult<T, Self::BidId>, Self::Error> {
 		let mut sale = SaleInfo::<T>::get().ok_or(MarketError::NoSales)?;
-		let status = Status::<T>::get().ok_or(MarketError::Uninitialized)?;
+		let core_count = Self::CoreCount::core_count().ok_or(MarketError::CoreCountUnknown)?;
 
-		ensure!(sale.first_core < status.core_count, MarketError::Unavailable);
+		ensure!(sale.first_core < core_count, MarketError::Unavailable);
 		ensure!(sale.cores_sold < sale.cores_offered, MarketError::SoldOut);
 
 		ensure!(block_number > sale.sale_start, MarketError::TooEarly);
@@ -266,10 +261,10 @@ impl<T: Config> Market<T> for Pallet<T> {
 		recorded_price: BalanceOf<T>,
 	) -> Result<RenewalOrderResult<T, Self::BidId>, Self::Error> {
 		let config = Configuration::<T>::get().ok_or(MarketError::Uninitialized)?;
-		let status = Status::<T>::get().ok_or(MarketError::Uninitialized)?;
+		let core_count = Self::CoreCount::core_count().ok_or(MarketError::CoreCountUnknown)?;
 		let mut sale = SaleInfo::<T>::get().ok_or(MarketError::NoSales)?;
 
-		ensure!(sale.first_core < status.core_count, MarketError::Unavailable);
+		ensure!(sale.first_core < core_count, MarketError::Unavailable);
 		ensure!(sale.cores_sold < sale.cores_offered, MarketError::SoldOut);
 
 		let price_cap =
@@ -301,7 +296,9 @@ impl<T: Config> Market<T> for Pallet<T> {
 		block_number: RelayBlockNumberOf<T>,
 		weight_meter: &mut WeightMeter,
 	) -> Vec<TickAction<T, Self::BidId>> {
-		let (Some(config), Some(status)) = (Configuration::<T>::get(), Status::<T>::get()) else {
+		let (Some(config), Some(core_count)) =
+			(Configuration::<T>::get(), Self::CoreCount::core_count())
+		else {
 			return vec![];
 		};
 
@@ -311,7 +308,7 @@ impl<T: Config> Market<T> for Pallet<T> {
 			if let Some(sale) = SaleInfo::<T>::get() {
 				if timeslice >= sale.region_begin {
 					weight_meter.consume(T::WeightInfo::market_sale_rotated());
-					sale_rotated::<T, Self>(sale, &config, &status, block_number, &mut actions);
+					sale_rotated::<T, Self>(sale, &config, core_count, block_number, &mut actions);
 				}
 			}
 		};
@@ -323,13 +320,13 @@ impl<T: Config> Market<T> for Pallet<T> {
 pub(crate) fn sale_rotated<T: Config, M: Market<T>>(
 	sale: SaleInfoRecordOf<T>,
 	config: &ConfigRecordOf<T>,
-	status: &StatusRecord,
+	core_count: CoreIndex,
 	block_number: RelayBlockNumberOf<T>,
 	actions: &mut Vec<TickAction<T, BidIdOf<T>>>,
 ) {
 	let reserved_cores = M::CoreCount::reserved_core_count();
 	let (new_prices, new_sale) =
-		rotate_sale::<T>(&sale, config, status, reserved_cores, block_number);
+		rotate_sale::<T>(&sale, config, core_count, reserved_cores, block_number);
 	SaleInfo::<T>::put(&new_sale);
 
 	let start_price = sell_price::<T>(block_number, &new_sale);
@@ -362,23 +359,7 @@ pub(crate) fn leadin_factor_at(when: FixedU64) -> FixedU64 {
 	}
 }
 
-fn current_timeslice<T: Config>(now: RelayBlockNumberOf<T>) -> Timeslice {
-	let timeslice_period = T::TimeslicePeriod::get();
-	(now / timeslice_period).saturated_into()
-}
-
-fn next_timeslice_to_commit<T: Config>(
-	now: RelayBlockNumberOf<T>,
-	config: &ConfigRecordOf<T>,
-	status: &StatusRecord,
-) -> Option<Timeslice> {
-	if status.last_committed_timeslice < latest_timeslice_ready_to_commit::<T>(now, config) {
-		Some(status.last_committed_timeslice + 1)
-	} else {
-		None
-	}
-}
-
+// TODO: Remove.
 fn latest_timeslice_ready_to_commit<T: Config>(
 	now: RelayBlockNumberOf<T>,
 	config: &ConfigRecordOf<T>,
@@ -405,13 +386,13 @@ fn adapt_prices<T: Config>(old_sale: &SaleInfoRecordOf<T>) -> AdaptedPrices<Bala
 pub(crate) fn rotate_sale<T: Config>(
 	old_sale: &SaleInfoRecordOf<T>,
 	config: &ConfigRecordOf<T>,
-	status: &StatusRecord,
+	core_count: CoreIndex,
 	reserved_cores: CoreIndex,
 	now: RelayBlockNumberOf<T>,
 ) -> (AdaptedPrices<BalanceOf<T>>, SaleInfoRecordOf<T>) {
 	let new_prices = adapt_prices::<T>(&old_sale);
 
-	let max_possible_sales = status.core_count.saturating_sub(reserved_cores);
+	let max_possible_sales = core_count.saturating_sub(reserved_cores);
 	let limit_cores_offered = config.limit_cores_offered.unwrap_or(CoreIndex::max_value());
 	let cores_offered = limit_cores_offered.min(max_possible_sales);
 	let sale_start = now.saturating_add(config.interlude_length);

@@ -112,15 +112,25 @@ impl<T: Config> Pallet<T> {
 			Reservations::<T>::decode_len().unwrap_or(0) as CoreIndex +
 			extra_cores;
 
+		let config = Configuration::<T>::get().ok_or(Error::<T>::Uninitialized)?;
+
+		let commit_timeslice = Self::latest_timeslice_ready_to_commit(&config);
+		let status = StatusRecord {
+			core_count,
+			private_pool_size: 0,
+			system_pool_size: 0,
+			last_committed_timeslice: commit_timeslice.saturating_sub(1),
+			last_timeslice: Self::current_timeslice(),
+		};
+		Status::<T>::put(&status);
+
 		Self::do_request_core_count(core_count)?;
 
 		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
-		let sales_started = <Self as Market<T>>::start_sales(now, end_price, core_count)?;
+		let sales_started = <Self as Market<T>>::start_sales(now, end_price)?;
 
 		Self::deposit_event(Event::<T>::SalesStarted { price: end_price, core_count });
 
-		// TODO: Don't read status here.
-		let status = Status::<T>::get().ok_or(Error::<T>::Uninitialized)?;
 		Self::rotate_sale(
 			&sales_started.imaginary_old_sale,
 			&sales_started.new_sale,

@@ -158,6 +158,10 @@ impl<T: Config> CoreCountProvider<T> for CoreCountProviderImpl<T> {
 		Reservations::<T>::decode_len().unwrap_or_default() as CoreIndex +
 			Leases::<T>::decode_len().unwrap_or_default() as CoreIndex
 	}
+
+	fn core_count() -> Option<CoreIndex> {
+		Status::<T>::get().map(|status| status.core_count)
+	}
 }
 
 pub struct TimesliceProviderImpl<T: Config>(PhantomData<T>);
