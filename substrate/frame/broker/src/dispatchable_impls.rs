@@ -104,7 +104,7 @@ impl<T: Config> Pallet<T> {
 	}
 
 	pub(crate) fn do_start_sales(
-		end_price: BalanceOf<T>,
+		reserve_price: BalanceOf<T>,
 		extra_cores: CoreIndex,
 	) -> DispatchResult {
 		// Determine the core count
@@ -116,14 +116,14 @@ impl<T: Config> Pallet<T> {
 
 		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
 		let sales_started =
-			T::Market::start_sales(now, end_price, core_count).map_err(Into::into)?;
+			T::Market::start_sales(now, reserve_price, core_count).map_err(Into::into)?;
 
-		Self::deposit_event(Event::<T>::SalesStarted { price: end_price, core_count });
+		Self::deposit_event(Event::<T>::SalesStarted { price: reserve_price, core_count });
 
 		// TODO: Don't read status here.
 		let status = Self::market_status().ok_or(Error::<T>::Uninitialized)?;
 		Self::rotate_sale(
-			&sales_started.imaginary_old_sale,
+			&sales_started.old_sale,
 			&sales_started.new_sale,
 			sales_started.new_prices,
 			sales_started.start_price,
@@ -138,7 +138,12 @@ impl<T: Config> Pallet<T> {
 		price_limit: BalanceOf<T>,
 	) -> Result<(), DispatchError> {
 		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
-		match T::Market::place_order(now, &who, price_limit).map_err(Into::into)? {
+		// In the descending clock auction, bid at the current price (clamped to the
+		// user's maximum willingness to pay).
+		let current_price =
+			T::Market::current_price(now).ok_or(Error::<T>::NoSales)?;
+		let bid_price = price_limit.min(current_price);
+		match T::Market::place_order(now, &who, bid_price).map_err(Into::into)? {
 			OrderResult::BidPlaced { id, bid_price } => {
 				Self::lock_funds(&who, bid_price)?;
 
@@ -183,8 +188,12 @@ impl<T: Config> Pallet<T> {
 
 				Ok(DoRenewResult::BidPlaced { id })
 			},
-			RenewalOrderResult::Sold { price, next_renewal_price, region_id, effective_to } => {
+			RenewalOrderResult::Sold { price, next_renewal_price, region_id, effective_to, displaced } => {
 				Self::charge(&who, price)?;
+
+				if let Some(d) = displaced {
+					Self::refund(&d.who, d.refund)?;
+				}
 
 				Workplan::<T>::insert((region_id.begin, region_id.core), &workload);
 
@@ -571,21 +580,27 @@ impl<T: Config> Pallet<T> {
 	) -> DispatchResult {
 		let sale = Self::market_sale_info().ok_or(Error::<T>::NoSales)?;
 		let mut core = core;
+		let mut deferred_renewal = false;
 
-		// Check if the core is expiring in the next bulk period; if so, we will renew it now.
-		//
-		// In case we renew it now, we don't need to check the workload end since we know it is
-		// eligible for renewal.
+		// Check if the core is expiring in the next bulk period; if so, we will renew it now
+		// if we're in the Renewal phase. Otherwise, auto-renewal will be processed when
+		// the Renewal phase starts.
 		if PotentialRenewals::<T>::get(PotentialRenewalId { core, when: sale.region_begin })
 			.is_some()
 		{
-			let DoRenewResult::Renewed { new_core } =
-				Self::do_renew(sovereign_account.clone(), core)?
-			else {
-				return Err(Error::<T>::NotAllowed.into());
-			};
-
-			core = new_core;
+			match Self::do_renew(sovereign_account.clone(), core) {
+				Ok(DoRenewResult::Renewed { new_core }) => {
+					core = new_core;
+				},
+				Ok(DoRenewResult::BidPlaced { id }) => {
+					// During Market phase, renewal goes through the auction.
+					// Close the bid — auto-renewal will be processed when
+					// the Renewal phase starts via renew_cores.
+					let _ = Self::do_close_bid(id, None);
+					deferred_renewal = true;
+				},
+				Err(e) => return Err(e),
+			}
 		} else if let Some(workload_end) = workload_end_hint {
 			ensure!(
 				PotentialRenewals::<T>::get(PotentialRenewalId { core, when: workload_end })
@@ -596,6 +611,14 @@ impl<T: Config> Pallet<T> {
 			return Err(Error::<T>::NotAllowed.into());
 		}
 
+		// When the renewal was deferred (bid closed during Market phase), use
+		// region_begin so that renew_cores picks it up during this sale's Renewal phase.
+		let next_renewal = if deferred_renewal {
+			sale.region_begin
+		} else {
+			workload_end_hint.unwrap_or(sale.region_end)
+		};
+
 		// We are sorting auto renewals by `CoreIndex`.
 		AutoRenewals::<T>::try_mutate(|renewals| {
 			let pos = renewals
@@ -603,11 +626,7 @@ impl<T: Config> Pallet<T> {
 				.unwrap_or_else(|e| e);
 			renewals.try_insert(
 				pos,
-				AutoRenewalRecord {
-					core,
-					task,
-					next_renewal: workload_end_hint.unwrap_or(sale.region_end),
-				},
+				AutoRenewalRecord { core, task, next_renewal },
 			)
 		})
 		.map_err(|_| Error::<T>::TooManyAutoRenewals)?;

@@ -296,13 +296,13 @@ pub mod v4 {
 					);
 
 				let updated_config_record = ConfigRecord {
-					interlude_length: updated_interlude_length,
-					leadin_length: updated_leadin_length,
+					market_period: updated_interlude_length,
+					renewal_period: updated_leadin_length,
 					advance_notice: config_record.advance_notice,
 					region_length: config_record.region_length,
 					ideal_bulk_proportion: config_record.ideal_bulk_proportion,
 					limit_cores_offered: config_record.limit_cores_offered,
-					renewal_bump: config_record.renewal_bump,
+					penalty: config_record.renewal_bump,
 					contribution_timeout: config_record.contribution_timeout,
 				};
 				T::Market::set_configuration(updated_config_record);
@@ -314,19 +314,17 @@ pub mod v4 {
 
 				let updated_sale_start: RelayBlockNumberOf<T> =
 					BlockConversion::convert_block_number_to_relay_height(sale_info.sale_start);
-				let updated_leadin_length: RelayBlockNumberOf<T> =
-					BlockConversion::convert_block_length_to_relay_length(sale_info.leadin_length);
 
 				let updated_sale_info = SaleInfoRecord {
 					sale_start: updated_sale_start,
-					leadin_length: updated_leadin_length,
-					end_price: sale_info.price,
+					opening_price: sale_info.price,
+					reserve_price: sale_info.price,
+					clearing_price: sale_info.sellout_price,
 					region_begin: sale_info.region_begin,
 					region_end: sale_info.region_end,
 					ideal_cores_sold: sale_info.ideal_cores_sold,
 					cores_offered: sale_info.cores_offered,
 					first_core: sale_info.first_core,
-					sellout_price: sale_info.sellout_price,
 					cores_sold: sale_info.cores_sold,
 				};
 				T::Market::set_sale_info(updated_sale_info);
@@ -341,7 +339,7 @@ pub mod v4 {
 				old_interlude_length,
 				old_configuration_leadin_length,
 				old_sale_start,
-				old_sale_info_leadin_length,
+				_old_sale_info_leadin_length,
 			): (BlockNumberFor<T>, BlockNumberFor<T>, BlockNumberFor<T>, BlockNumberFor<T>) =
 				Decode::decode(&mut &state[..]).expect("pre_upgrade provides a valid state; qed");
 
@@ -349,17 +347,17 @@ pub mod v4 {
 				ensure!(
 					Self::verify_updated_block_length(
 						old_configuration_leadin_length,
-						config_record.leadin_length
+						config_record.renewal_period
 					),
-					"must migrate configuration leadin_length"
+					"must migrate configuration renewal_period"
 				);
 
 				ensure!(
 					Self::verify_updated_block_length(
 						old_interlude_length,
-						config_record.interlude_length
+						config_record.market_period
 					),
-					"must migrate configuration interlude_length"
+					"must migrate configuration market_period"
 				);
 			}
 
@@ -367,14 +365,6 @@ pub mod v4 {
 				ensure!(
 					Self::verify_updated_block_time(old_sale_start, sale_info.sale_start),
 					"must migrate sale info sale_start"
-				);
-
-				ensure!(
-					Self::verify_updated_block_length(
-						old_sale_info_leadin_length,
-						sale_info.leadin_length
-					),
-					"must migrate sale info leadin_length"
 				);
 			}
 

@@ -15,6 +15,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::SalePhase;
 use alloc::vec::Vec;
 use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
 use scale_info::TypeInfo;
@@ -32,6 +33,15 @@ pub trait CoreCountProvider {
 	fn reserved_core_count() -> CoreIndex;
 }
 
+/// Trait for querying renewal rights from the broker.
+///
+/// The market needs this to determine displacement protection during the Renewal phase.
+/// Auction winners with renewal rights cannot be displaced by other renewers.
+pub trait RenewalRightsProvider<AccountId> {
+	/// Returns the number of renewal rights held by `who` for the given timeslice.
+	fn renewal_rights_count(who: &AccountId, when: Timeslice) -> u32;
+}
+
 /// Errors specific to market operations.
 #[derive(Debug)]
 pub enum MarketError {
@@ -42,6 +52,12 @@ pub enum MarketError {
 	TooEarly,
 	Unavailable,
 	SoldOut,
+	/// Operation not allowed in the current sale phase.
+	WrongPhase,
+	/// Bid price is above the current descending price.
+	BidTooHigh,
+	/// Bids cannot be lowered or cancelled.
+	BidNotCancellable,
 }
 
 impl From<MarketError> for DispatchError {
@@ -54,6 +70,9 @@ impl From<MarketError> for DispatchError {
 			MarketError::TooEarly => Self::Other("TooEarly"),
 			MarketError::Unavailable => Self::Other("Unavailable"),
 			MarketError::SoldOut => Self::Other("SoldOut"),
+			MarketError::WrongPhase => Self::Other("WrongPhase"),
+			MarketError::BidTooHigh => Self::Other("BidTooHigh"),
+			MarketError::BidNotCancellable => Self::Other("BidNotCancellable"),
 		}
 	}
 }
@@ -64,8 +83,18 @@ pub enum OrderResult<Balance, BidId> {
 	Sold { price: Balance, region_id: RegionId, region_end: Timeslice },
 }
 
+/// Information about a bid that was displaced during the Renewal phase.
+pub struct DisplacedBid<AccountId, Balance, BidId> {
+	/// The account whose allocation was displaced.
+	pub who: AccountId,
+	/// The amount to refund (their original bid price).
+	pub refund: Balance,
+	/// The bid ID that was displaced.
+	pub bid_id: BidId,
+}
+
 /// Result of placing a renewal order.
-pub enum RenewalOrderResult<Balance, BidId> {
+pub enum RenewalOrderResult<Balance, BidId, AccountId> {
 	BidPlaced {
 		id: BidId,
 		bid_price: Balance,
@@ -75,6 +104,9 @@ pub enum RenewalOrderResult<Balance, BidId> {
 		next_renewal_price: Balance,
 		region_id: RegionId,
 		effective_to: Timeslice,
+		/// If a renewal displaced an auction winner, contains the displaced bid info.
+		/// The broker should refund the displaced bidder.
+		displaced: Option<DisplacedBid<AccountId, Balance, BidId>>,
 	},
 }
 
@@ -116,7 +148,7 @@ pub enum TickAction<Balance, BlockNumber, AccountId, BidId> {
 /// Data returned when sales are first started.
 #[derive(Debug)]
 pub struct SalesStarted<Balance, BlockNumber> {
-	pub imaginary_old_sale: SaleInfoRecord<Balance, BlockNumber>,
+	pub old_sale: SaleInfoRecord<Balance, BlockNumber>,
 	pub new_sale: SaleInfoRecord<Balance, BlockNumber>,
 	pub new_prices: AdaptedPrices<Balance>,
 	pub start_price: Balance,
@@ -128,6 +160,7 @@ pub struct SalesStarted<Balance, BlockNumber> {
 /// - Every order will either create a bid or will be resolved immediately.
 /// - There are two types of orders: bulk coretime purchase and bulk coretime renewal.
 /// - Coretime regions are fungible.
+/// - The market operates in phases: Market (auction), Renewal, Settlement.
 pub trait Market {
 	type AccountId;
 	type Balance;
@@ -147,15 +180,16 @@ pub trait Market {
 
 	fn start_sales(
 		block_number: Self::BlockNumber,
-		end_price: Self::Balance,
+		reserve_price: Self::Balance,
 		core_count: CoreIndex,
 	) -> Result<SalesStarted<Self::Balance, Self::BlockNumber>, Self::Error>;
 
 	/// Place an order for one bulk coretime region purchase.
 	///
-	/// This method may or may not create a bid, according to the market rules.
+	/// During Market phase: creates a bid at the given price. Bids must be <= current
+	/// descending price. Returns `BidPlaced`.
 	///
-	/// - `price_limit` - maximum price which the buyer is willing to pay
+	/// - `price_limit` - the bid price (must be <= current descending price)
 	fn place_order(
 		block_number: Self::BlockNumber,
 		who: &Self::AccountId,
@@ -164,18 +198,31 @@ pub trait Market {
 
 	/// Place an order for bulk coretime renewal.
 	///
-	/// This method may or may not create a bid, according to the market rules.
+	/// During Market phase: creates a bid like `place_order` (renewer participating in auction).
+	/// During Renewal phase: exercises renewal right. May displace the lowest non-renewer
+	/// auction winner if all cores are allocated.
 	fn place_renewal_order(
 		block_number: Self::BlockNumber,
 		who: &Self::AccountId,
 		renewal: PotentialRenewalId,
 		recorded_price: Self::Balance,
-	) -> Result<RenewalOrderResult<Self::Balance, Self::BidId>, Self::Error>;
+	) -> Result<RenewalOrderResult<Self::Balance, Self::BidId, Self::AccountId>, Self::Error>;
+
+	/// Raise an existing bid to a higher price.
+	///
+	/// RFC-17: bids cannot be lowered or cancelled, only raised up to the current
+	/// descending price. Returns the additional amount that needs to be locked
+	/// (new_price - old_price).
+	fn raise_bid(
+		block_number: Self::BlockNumber,
+		id: Self::BidId,
+		who: &Self::AccountId,
+		new_price: Self::Balance,
+	) -> Result<Self::Balance, Self::Error>;
 
 	/// Close the bid given its `BidId`.
 	///
-	/// If the market logic allows creating the bids this method allows to close any bids (either
-	/// forcefully if `maybe_check_owner` is `None` or checking the bid owner if it's `Some`).
+	/// In RFC-17, bids are binding and cannot be cancelled. This returns an error.
 	fn close_bid(
 		id: Self::BidId,
 		maybe_check_owner: Option<Self::AccountId>,
@@ -200,4 +247,6 @@ pub trait MarketState: Market {
 	fn set_sale_info(sale_info: SaleInfoRecord<Self::Balance, Self::BlockNumber>);
 
 	fn current_price(block_number: Self::BlockNumber) -> Option<Self::Balance>;
+
+	fn current_phase() -> SalePhase;
 }

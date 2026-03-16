@@ -19,8 +19,8 @@
 
 use crate::*;
 use frame_support::derive_impl;
-use sp_core::ConstU64;
-use sp_coretime::{CenterTargetPrice, CoreCountProvider, CoreIndex};
+use sp_core::{ConstU32, ConstU64};
+use sp_coretime::{CenterTargetPrice, CoreCountProvider, CoreIndex, RenewalRightsProvider};
 use sp_runtime::BuildStorage;
 
 type Block = frame_system::mocking::MockBlock<Test>;
@@ -45,24 +45,49 @@ impl CoreCountProvider for TestCoreCountProvider {
 	}
 }
 
+/// Mock renewal rights provider. Stores renewal rights in a thread-local.
+pub struct TestRenewalRights;
+
+thread_local! {
+	static RENEWAL_RIGHTS: core::cell::RefCell<alloc::collections::BTreeMap<(u64, Timeslice), u32>> =
+		core::cell::RefCell::new(Default::default());
+}
+
+impl TestRenewalRights {
+	pub fn set(who: u64, when: Timeslice, count: u32) {
+		RENEWAL_RIGHTS.with(|r| {
+			r.borrow_mut().insert((who, when), count);
+		});
+	}
+}
+
+impl RenewalRightsProvider<u64> for TestRenewalRights {
+	fn renewal_rights_count(who: &u64, when: Timeslice) -> u32 {
+		RENEWAL_RIGHTS.with(|r| r.borrow().get(&(*who, when)).copied().unwrap_or(0))
+	}
+}
+
 impl crate::pallet::Config for Test {
 	type Balance = u64;
 	type RelayBlockNumber = u64;
 	type WeightInfo = ();
 	type PriceAdapter = CenterTargetPrice<u64>;
 	type CoreCountProvider = TestCoreCountProvider;
+	type RenewalRights = TestRenewalRights;
 	type TimeslicePeriod = ConstU64<2>;
+	type MaxBids = ConstU32<100>;
+	type PriceMultiplier = ConstU32<2>;
 }
 
 pub fn new_config() -> ConfigRecord<u64> {
 	ConfigRecord {
 		advance_notice: 2,
-		interlude_length: 1,
-		leadin_length: 1,
-		ideal_bulk_proportion: Default::default(),
+		market_period: 20,
+		renewal_period: 10,
+		ideal_bulk_proportion: sp_arithmetic::Perbill::from_percent(100),
 		limit_cores_offered: None,
 		region_length: 3,
-		renewal_bump: sp_arithmetic::Perbill::from_percent(10),
+		penalty: sp_arithmetic::Perbill::from_percent(30),
 		contribution_timeout: 5,
 	}
 }

@@ -237,7 +237,7 @@ fn create_configure_broker_call(para_id: u32) -> DynamicPayload {
 	};
 
 	let start_sales_call = value! {
-		Broker(start_sales { end_price: 1u128, extra_cores: 0u16 })
+		Broker(start_sales { reserve_price: 1u128, extra_cores: 0u16 })
 	};
 
 	let calls = vec![

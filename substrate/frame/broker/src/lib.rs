@@ -315,13 +315,12 @@ pub mod pallet {
 		SaleInitialized {
 			/// The relay block number at which the sale will/did start.
 			sale_start: RelayBlockNumberOf<T>,
-			/// The length in relay chain blocks of the Leadin Period (where the price is
-			/// decreasing).
-			leadin_length: RelayBlockNumberOf<T>,
-			/// The price of Bulk Coretime at the beginning of the Leadin Period.
+			/// The length in relay chain blocks of the Market Period.
+			market_period: RelayBlockNumberOf<T>,
+			/// The price of Bulk Coretime at the beginning of the Market period.
 			start_price: BalanceOf<T>,
-			/// The price of Bulk Coretime after the Leadin Period.
-			end_price: BalanceOf<T>,
+			/// The reserve (floor) price of the descending auction.
+			reserve_price: BalanceOf<T>,
 			/// The first timeslice of the Regions which are being sold in this sale.
 			region_begin: Timeslice,
 			/// The timeslice on which the Regions which are being sold in the sale terminate.
@@ -688,7 +687,7 @@ pub mod pallet {
 		/// Begin the Bulk Coretime sales rotation.
 		///
 		/// - `origin`: Must be Root or pass `AdminOrigin`.
-		/// - `end_price`: The price after the leadin period of Bulk Coretime in the first sale.
+		/// - `reserve_price`: The reserve (floor) price of Bulk Coretime in the first sale.
 		/// - `extra_cores`: Number of extra cores that should be requested on top of the cores
 		///   required for `Reservations` and `Leases`.
 		///
@@ -700,11 +699,11 @@ pub mod pallet {
 		))]
 		pub fn start_sales(
 			origin: OriginFor<T>,
-			end_price: BalanceOf<T>,
+			reserve_price: BalanceOf<T>,
 			extra_cores: CoreIndex,
 		) -> DispatchResultWithPostInfo {
 			T::AdminOrigin::ensure_origin_or_root(origin)?;
-			Self::do_start_sales(end_price, extra_cores)?;
+			Self::do_start_sales(reserve_price, extra_cores)?;
 			Ok(Pays::No.into())
 		}
 

@@ -51,12 +51,12 @@ fn assert_has_event<T: Config>(generic_event: <T as Config>::RuntimeEvent) {
 fn new_config_record<T: Config>() -> ConfigRecordOf<T> {
 	ConfigRecord {
 		advance_notice: 2u32.into(),
-		interlude_length: 1u32.into(),
-		leadin_length: 1u32.into(),
+		market_period: 1u32.into(),
+		renewal_period: 1u32.into(),
 		ideal_bulk_proportion: Default::default(),
 		limit_cores_offered: None,
 		region_length: 3,
-		renewal_bump: Perbill::from_percent(10),
+		penalty: Perbill::from_percent(10),
 		contribution_timeout: 5,
 	}
 }
@@ -99,7 +99,7 @@ fn advance_to<T: Config>(b: u32) {
 
 struct StartedSale<Balance> {
 	start_price: Balance,
-	end_price: Balance,
+	reserve_price: Balance,
 	first_core: CoreIndex,
 }
 
@@ -121,7 +121,7 @@ fn setup_and_start_sale<T: Config>() -> Result<StartedSale<BalanceOf<T>>, Benchm
 
 	let sale_data = StartedSale {
 		start_price,
-		end_price: sale.end_price,
+		reserve_price: sale.reserve_price,
 		first_core: sale.first_core,
 	};
 
@@ -274,9 +274,9 @@ mod benches {
 		assert_last_event::<T>(
 			Event::SaleInitialized {
 				sale_start: sale.sale_start,
-				leadin_length: sale.leadin_length,
+				market_period: Broker::<T>::market_configuration().unwrap().market_period,
 				start_price,
-				end_price: sale.end_price,
+				reserve_price: sale.reserve_price,
 				region_begin: sale.region_begin,
 				region_end: sale.region_end,
 				ideal_cores_sold: sale.ideal_cores_sold,
@@ -304,8 +304,8 @@ mod benches {
 		_(RawOrigin::Signed(caller.clone()), sale_data.start_price);
 
 		assert_eq!(
-			Broker::<T>::market_sale_info().unwrap().sellout_price.unwrap(),
-			sale_data.end_price
+			Broker::<T>::market_sale_info().unwrap().clearing_price.unwrap(),
+			sale_data.reserve_price
 		);
 		let sale = Broker::<T>::market_sale_info().unwrap();
 		assert_last_event::<T>(
@@ -316,7 +316,7 @@ mod benches {
 					core: sale_data.first_core,
 					mask: CoreMask::complete(),
 				},
-				price: sale_data.end_price,
+				price: sale_data.reserve_price,
 				duration: 3u32.into(),
 			}
 			.into(),
@@ -1306,9 +1306,9 @@ mod benches {
 		assert_has_event::<T>(
 			Event::SaleInitialized {
 				sale_start: new_sale.sale_start,
-				leadin_length: new_sale.leadin_length,
+				market_period: Broker::<T>::market_configuration().unwrap().market_period,
 				start_price,
-				end_price: new_sale.end_price,
+				reserve_price: new_sale.reserve_price,
 				region_begin: new_sale.region_begin,
 				region_end: new_sale.region_end,
 				ideal_cores_sold: new_sale.ideal_cores_sold,

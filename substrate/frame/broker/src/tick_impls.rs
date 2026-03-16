@@ -190,10 +190,21 @@ impl<T: Config> Pallet<T> {
 
 	pub(crate) fn process_market_logic(meter: &mut WeightMeter) {
 		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
+		let phase_before = T::Market::current_phase();
 		let result = T::Market::tick(now, meter);
 
 		for action in result {
 			Self::process_tick_action(action, meter);
+		}
+
+		// Process auto-renewals when transitioning into the Renewal phase.
+		// During Renewal phase, `do_renew` returns `Sold` immediately, which is
+		// required for proper workplan and PotentialRenewal updates.
+		let phase_after = T::Market::current_phase();
+		if phase_before != SalePhase::Renewal && phase_after == SalePhase::Renewal {
+			if let Some(sale) = Self::market_sale_info() {
+				Self::renew_cores(&sale);
+			}
 		}
 	}
 
@@ -254,11 +265,15 @@ impl<T: Config> Pallet<T> {
 		let just_pool = Schedule::truncate_from(vec![pool_item]);
 
 		// Clean up the old sale - we need to use up any unused cores by putting them into the
-		// InstaPool.
+		// InstaPool. Skip cores that already have workplan entries (e.g., from renewals
+		// exercised during the Renewal phase).
 		let mut old_pooled: SignedCoreMaskBitCount = 0;
 		for i in old_sale.cores_sold..old_sale.cores_offered {
-			old_pooled.saturating_accrue(80);
-			Workplan::<T>::insert((old_sale.region_begin, old_sale.first_core + i), &just_pool);
+			let core = old_sale.first_core + i;
+			if !Workplan::<T>::contains_key((old_sale.region_begin, core)) {
+				old_pooled.saturating_accrue(80);
+				Workplan::<T>::insert((old_sale.region_begin, core), &just_pool);
+			}
 		}
 		InstaPoolIo::<T>::mutate(old_sale.region_begin, |r| r.system.saturating_accrue(old_pooled));
 		InstaPoolIo::<T>::mutate(old_sale.region_end, |r| r.system.saturating_reduce(old_pooled));
@@ -326,13 +341,16 @@ impl<T: Config> Pallet<T> {
 		});
 		Leases::<T>::put(&leases);
 
-		Self::renew_cores(new_sale);
+		// Note: renew_cores is now called in process_market_logic when transitioning
+		// to the Renewal phase, where do_renew returns an immediate `Sold` result.
 
+		let config = Self::market_configuration()
+			.expect("market configuration must be set before sale rotation; qed");
 		Self::deposit_event(Event::SaleInitialized {
 			sale_start: new_sale.sale_start,
-			leadin_length: new_sale.leadin_length,
+			market_period: config.market_period,
 			start_price,
-			end_price: new_prices.end_price,
+			reserve_price: new_prices.reserve_price,
 			region_begin: new_sale.region_begin,
 			region_end: new_sale.region_end,
 			ideal_cores_sold: new_sale.ideal_cores_sold,
