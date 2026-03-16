@@ -121,13 +121,11 @@ pub struct PotentialRenewalId {
 	PartialEq,
 	Eq,
 	Debug,
-	Default,
 	TypeInfo,
 	MaxEncodedLen,
 )]
 pub enum SalePhase {
 	/// Market period: descending Dutch auction, bids accepted.
-	#[default]
 	Market,
 	/// Renewal period: existing tenants can exercise renewal rights.
 	Renewal,

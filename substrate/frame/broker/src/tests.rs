@@ -2009,20 +2009,12 @@ fn enable_auto_renew_renews() {
 		// Advance past the next sale start (sale_start=6, need block > sale_start).
 		advance_to(7);
 
-		// Since we didn't renew for the next bulk period, enabling auto-renewal will attempt
-		// renewal. During Market phase, the bid is placed and then closed (deferred to
-		// Renewal phase). The auto-renewal record tracks this.
-
-		// Will fail because we didn't fund the sovereign account:
-		assert_noop!(
-			Broker::do_enable_auto_renew(1001, region_id.core, 1001, None),
-			TokenError::FundsUnavailable
-		);
-
-		// Will succeed after funding the sovereign account:
-		endow(1001, 1000);
-
+		// Since we didn't renew for the next bulk period, enabling auto-renewal will defer
+		// the renewal to the Renewal phase (via renew_cores). No funds are needed yet.
 		assert_ok!(Broker::do_enable_auto_renew(1001, region_id.core, 1001, None));
+
+		// Fund the sovereign account so the renewal succeeds during Renewal phase.
+		endow(1001, 1000);
 		// During Market phase, the renewal is deferred. next_renewal is set to region_begin
 		// so renew_cores will pick it up during the Renewal phase.
 		let sale = Broker::market_sale_info().unwrap();
@@ -2943,25 +2935,6 @@ fn do_renew_and_get_the_new_core(
 ) -> Result<CoreIndex, DispatchError> {
 	match Broker::do_renew(who, core)? {
 		crate::dispatchable_impls::DoRenewResult::Renewed { new_core } => Ok(new_core),
-		crate::dispatchable_impls::DoRenewResult::BidPlaced { .. } => {
-			// Bid placed during Market phase. Advance through settlement + finalization
-			// to get the region issued, then extract the core from events.
-			settle_market();
-			// The renewal went through the auction, so look for the Purchased event.
-			for event in System::events().into_iter().rev() {
-				if let RuntimeEvent::Broker(Event::Purchased {
-					who: buyer,
-					region_id,
-					..
-				}) = event.event
-				{
-					if buyer == who {
-						return Ok(region_id.core);
-					}
-				}
-			}
-			panic!("Expected a Purchased or Renewed event for the renewal bid");
-		},
 	}
 }
 

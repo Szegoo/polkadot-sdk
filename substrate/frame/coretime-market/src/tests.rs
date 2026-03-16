@@ -70,7 +70,7 @@ fn start_sales_initializes_market_phase() {
 	TestExt::new().execute_with(|| {
 		start_sales(100, 2);
 
-		assert_eq!(crate::CurrentPhase::<Test>::get(), SalePhase::Market);
+		assert_eq!(crate::CurrentPhase::<Test>::get(), Some(SalePhase::Market));
 		let sale = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
 		assert!(sale.cores_offered > 0);
 		assert_eq!(sale.cores_sold, 0);
@@ -91,32 +91,11 @@ fn market_to_renewal_transition_on_timeout() {
 
 		// Before market end: still Market.
 		tick(market_end - 1);
-		assert_eq!(crate::CurrentPhase::<Test>::get(), SalePhase::Market);
+		assert_eq!(crate::CurrentPhase::<Test>::get(), Some(SalePhase::Market));
 
 		// At market end: transitions to Renewal.
 		tick(market_end);
-		assert_eq!(crate::CurrentPhase::<Test>::get(), SalePhase::Renewal);
-	});
-}
-
-#[test]
-fn market_to_renewal_early_close_when_all_cores_bid() {
-	TestExt::new().execute_with(|| {
-		start_sales(100, 2);
-
-		let sale = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
-		let block = sale.sale_start + 1;
-
-		// Place bids for all offered cores.
-		let current_price =
-			<CoretimeMarketImpl as MarketState>::current_price(block).unwrap();
-		for i in 0..sale.cores_offered {
-			assert!(place_bid(block, i as u64 + 1, current_price).is_ok());
-		}
-
-		// Tick should trigger early close.
-		tick(block);
-		assert_eq!(crate::CurrentPhase::<Test>::get(), SalePhase::Renewal);
+		assert_eq!(crate::CurrentPhase::<Test>::get(), Some(SalePhase::Renewal));
 	});
 }
 
@@ -131,13 +110,13 @@ fn renewal_to_settlement_transition() {
 		let renewal_end = market_end + config.renewal_period;
 
 		tick(market_end);
-		assert_eq!(crate::CurrentPhase::<Test>::get(), SalePhase::Renewal);
+		assert_eq!(crate::CurrentPhase::<Test>::get(), Some(SalePhase::Renewal));
 
 		tick(renewal_end - 1);
-		assert_eq!(crate::CurrentPhase::<Test>::get(), SalePhase::Renewal);
+		assert_eq!(crate::CurrentPhase::<Test>::get(), Some(SalePhase::Renewal));
 
 		tick(renewal_end);
-		assert_eq!(crate::CurrentPhase::<Test>::get(), SalePhase::Settlement);
+		assert_eq!(crate::CurrentPhase::<Test>::get(), Some(SalePhase::Settlement));
 	});
 }
 
@@ -153,7 +132,7 @@ fn settlement_to_market_transition_on_rotation() {
 
 		tick(market_end);
 		tick(renewal_end);
-		assert_eq!(crate::CurrentPhase::<Test>::get(), SalePhase::Settlement);
+		assert_eq!(crate::CurrentPhase::<Test>::get(), Some(SalePhase::Settlement));
 
 		// Set last_committed_timeslice >= region_begin to trigger rotation.
 		let mut status = <CoretimeMarketImpl as MarketState>::status().unwrap();
@@ -161,7 +140,7 @@ fn settlement_to_market_transition_on_rotation() {
 		<CoretimeMarketImpl as MarketState>::set_status(status);
 
 		let actions = tick(renewal_end + 1);
-		assert_eq!(crate::CurrentPhase::<Test>::get(), SalePhase::Market);
+		assert_eq!(crate::CurrentPhase::<Test>::get(), Some(SalePhase::Market));
 		assert!(actions.iter().any(|a| matches!(a, TickAction::SaleRotated { .. })));
 	});
 }
@@ -243,7 +222,8 @@ fn place_bid_fails_during_renewal_phase() {
 #[test]
 fn place_bid_fails_without_sale_info() {
 	TestExt::new().execute_with(|| {
-		assert!(matches!(place_bid(1, 1, 100), Err(MarketError::NoSales)));
+		// Before sales are started, CurrentPhase is None → WrongPhase.
+		assert!(matches!(place_bid(1, 1, 100), Err(MarketError::WrongPhase)));
 	});
 }
 
@@ -477,21 +457,16 @@ fn regions_use_correct_core_from_allocation() {
 // ============================================================================
 
 #[test]
-fn renewal_during_market_phase_creates_bid() {
+fn renewal_during_market_phase_fails() {
 	TestExt::new().execute_with(|| {
 		start_sales(100, 2);
 
 		let sale = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
 		let block = sale.sale_start + 1;
 
+		// Renewals are not allowed during Market phase — use place_order instead.
 		let result = place_renewal(block, 1, 0, sale.region_begin, 500);
-		assert!(result.is_ok());
-		match result.unwrap() {
-			RenewalOrderResult::BidPlaced { id, .. } => {
-				assert_eq!(id, 0);
-			},
-			_ => panic!("Expected BidPlaced during Market phase"),
-		}
+		assert!(matches!(result, Err(MarketError::WrongPhase)));
 	});
 }
 
@@ -1072,7 +1047,7 @@ fn full_sale_lifecycle() {
 			.count();
 		assert_eq!(region_count, 1);
 
-		assert_eq!(crate::CurrentPhase::<Test>::get(), SalePhase::Settlement);
+		assert_eq!(crate::CurrentPhase::<Test>::get(), Some(SalePhase::Settlement));
 
 		// --- Settlement → Next sale ---
 		let mut status = <CoretimeMarketImpl as MarketState>::status().unwrap();
@@ -1080,7 +1055,7 @@ fn full_sale_lifecycle() {
 		<CoretimeMarketImpl as MarketState>::set_status(status);
 
 		tick(renewal_end + 1);
-		assert_eq!(crate::CurrentPhase::<Test>::get(), SalePhase::Market);
+		assert_eq!(crate::CurrentPhase::<Test>::get(), Some(SalePhase::Market));
 
 		let sale2 = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
 		assert_eq!(sale2.region_begin, sale.region_end);

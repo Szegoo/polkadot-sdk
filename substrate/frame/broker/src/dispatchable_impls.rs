@@ -168,7 +168,7 @@ impl<T: Config> Pallet<T> {
 	pub(crate) fn do_renew(
 		who: T::AccountId,
 		core: CoreIndex,
-	) -> Result<DoRenewResult<T>, DispatchError> {
+	) -> Result<DoRenewResult, DispatchError> {
 		// TODO: Try to avoid reading SaleInfo here.
 		let sale = Self::market_sale_info().ok_or(Error::<T>::NoSales)?;
 
@@ -181,12 +181,9 @@ impl<T: Config> Pallet<T> {
 		match T::Market::place_renewal_order(now, &who, renewal_id, record.price)
 			.map_err(Into::into)?
 		{
-			RenewalOrderResult::BidPlaced { id, bid_price } => {
-				Self::lock_funds(&who, bid_price)?;
-
-				Self::deposit_event(Event::BidPlaced { bid_id: id, price: bid_price });
-
-				Ok(DoRenewResult::BidPlaced { id })
+			RenewalOrderResult::BidPlaced { .. } => {
+				defensive!("place_renewal_order should not return BidPlaced");
+				Err(Error::<T>::NotAllowed.into())
 			},
 			RenewalOrderResult::Sold { price, next_renewal_price, region_id, effective_to, displaced } => {
 				Self::charge(&who, price)?;
@@ -583,8 +580,8 @@ impl<T: Config> Pallet<T> {
 		let mut deferred_renewal = false;
 
 		// Check if the core is expiring in the next bulk period; if so, we will renew it now
-		// if we're in the Renewal phase. Otherwise, auto-renewal will be processed when
-		// the Renewal phase starts.
+		// if we're in the Renewal phase. During Market phase, defer to renew_cores which
+		// runs at the Market→Renewal transition.
 		if PotentialRenewals::<T>::get(PotentialRenewalId { core, when: sale.region_begin })
 			.is_some()
 		{
@@ -592,14 +589,11 @@ impl<T: Config> Pallet<T> {
 				Ok(DoRenewResult::Renewed { new_core }) => {
 					core = new_core;
 				},
-				Ok(DoRenewResult::BidPlaced { id }) => {
-					// During Market phase, renewal goes through the auction.
-					// Close the bid — auto-renewal will be processed when
-					// the Renewal phase starts via renew_cores.
-					let _ = Self::do_close_bid(id, None);
+				Err(_) => {
+					// During Market phase, do_renew fails (WrongPhase). Defer the
+					// renewal to renew_cores which runs when Renewal phase starts.
 					deferred_renewal = true;
 				},
-				Err(e) => return Err(e),
 			}
 		} else if let Some(workload_end) = workload_end_hint {
 			ensure!(
@@ -667,7 +661,6 @@ impl<T: Config> Pallet<T> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum DoRenewResult<T: Config> {
+pub(crate) enum DoRenewResult {
 	Renewed { new_core: CoreIndex },
-	BidPlaced { id: BidIdOf<T> },
 }

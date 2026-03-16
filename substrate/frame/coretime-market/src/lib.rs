@@ -209,7 +209,7 @@ pub mod pallet {
 		type MaxBids: Get<u32>;
 
 		/// Price multiplier for the opening price of the descending auction.
-		/// Opening price = previous clearing price × multiplier.
+		/// Opening price = previous clearing price * multiplier.
 		#[pallet::constant]
 		type PriceMultiplier: Get<u32>;
 	}
@@ -289,7 +289,7 @@ pub mod pallet {
 	#[pallet::storage]
 	pub type Configuration<T> = StorageValue<_, ConfigRecordOf<T>, OptionQuery>;
 
-	/// The relay chain status. Updated by the broker via [`MarketState::set_status`].
+	/// The coretime sale status. Updated by the broker via [`MarketState::set_status`].
 	#[pallet::storage]
 	pub type Status<T> = StorageValue<_, StatusRecord, OptionQuery>;
 
@@ -297,9 +297,9 @@ pub mod pallet {
 	#[pallet::storage]
 	pub type SaleInfo<T> = StorageValue<_, SaleInfoRecordOf<T>, OptionQuery>;
 
-	/// The current phase of the sale cycle.
+	/// The current phase of the sale cycle. `None` before sales are started.
 	#[pallet::storage]
-	pub type CurrentPhase<T> = StorageValue<_, SalePhase, ValueQuery>;
+	pub type CurrentPhase<T> = StorageValue<_, SalePhase, OptionQuery>;
 
 	/// Active bids during the Market phase. Keyed by bid ID.
 	#[pallet::storage]
@@ -393,7 +393,7 @@ impl<T: Config> Market for Pallet<T> {
 		who: &T::AccountId,
 		price_limit: BalanceOf<T>,
 	) -> Result<OrderResult<Self::Balance, Self::BidId>, Self::Error> {
-		ensure!(CurrentPhase::<T>::get() == SalePhase::Market, MarketError::WrongPhase);
+		ensure!(CurrentPhase::<T>::get() == Some(SalePhase::Market), MarketError::WrongPhase);
 		let sale = SaleInfo::<T>::get().ok_or(MarketError::NoSales)?;
 		ensure!(block_number > sale.sale_start, MarketError::TooEarly);
 
@@ -427,29 +427,7 @@ impl<T: Config> Market for Pallet<T> {
 		let status = Status::<T>::get().ok_or(MarketError::Uninitialized)?;
 		let sale = SaleInfo::<T>::get().ok_or(MarketError::NoSales)?;
 
-		match CurrentPhase::<T>::get() {
-			SalePhase::Market => {
-				// During Market phase, renewers participate in the auction like everyone else.
-				ensure!(block_number > sale.sale_start, MarketError::TooEarly);
-
-				let bid_count = NextBidId::<T>::get();
-				ensure!(bid_count < T::MaxBids::get(), MarketError::SoldOut);
-
-				let current_price = descending_price::<T>(block_number, &sale);
-				let bid_price = recorded_price.min(current_price);
-
-				let bid_id = bid_count;
-				NextBidId::<T>::put(bid_id.saturating_add(1));
-				Bids::<T>::insert(bid_id, BidRecord { who: who.clone(), price: bid_price });
-
-				Self::deposit_event(Event::BidPlaced {
-					who: who.clone(),
-					bid_id,
-					amount: bid_price,
-				});
-
-				Ok(RenewalOrderResult::BidPlaced { id: bid_id, bid_price })
-			},
+		match CurrentPhase::<T>::get().ok_or(MarketError::Uninitialized)? {
 			SalePhase::Renewal => {
 				let clearing =
 					AuctionClearingPrice::<T>::get().unwrap_or(sale.reserve_price);
@@ -551,7 +529,7 @@ impl<T: Config> Market for Pallet<T> {
 					Err(MarketError::Unavailable)
 				}
 			},
-			SalePhase::Settlement => Err(MarketError::WrongPhase),
+			SalePhase::Market | SalePhase::Settlement => Err(MarketError::WrongPhase),
 		}
 	}
 
@@ -561,7 +539,7 @@ impl<T: Config> Market for Pallet<T> {
 		who: &T::AccountId,
 		new_price: BalanceOf<T>,
 	) -> Result<BalanceOf<T>, Self::Error> {
-		ensure!(CurrentPhase::<T>::get() == SalePhase::Market, MarketError::WrongPhase);
+		ensure!(CurrentPhase::<T>::get() == Some(SalePhase::Market), MarketError::WrongPhase);
 		let sale = SaleInfo::<T>::get().ok_or(MarketError::NoSales)?;
 
 		let mut bid = Bids::<T>::get(id).ok_or(MarketError::BidNotExist)?;
@@ -605,15 +583,15 @@ impl<T: Config> Market for Pallet<T> {
 			return vec![];
 		};
 
-		let phase = CurrentPhase::<T>::get();
+		let Some(phase) = CurrentPhase::<T>::get() else {
+			return vec![];
+		};
 
 		match phase {
 			SalePhase::Market => {
 				let market_end = sale.sale_start.saturating_add(config.market_period);
-				let total_bids = NextBidId::<T>::get();
-				let early_close = total_bids >= sale.cores_offered as u32;
 
-				if block_number >= market_end || early_close {
+				if block_number >= market_end {
 					if !weight_meter.can_consume(T::WeightInfo::settle_auction()) {
 						return vec![];
 					}
@@ -727,13 +705,13 @@ impl<T: Config> MarketState for Pallet<T> {
 
 	fn current_price(block_number: RelayBlockNumberOf<T>) -> Option<BalanceOf<T>> {
 		let sale = SaleInfo::<T>::get()?;
-		match CurrentPhase::<T>::get() {
+		match CurrentPhase::<T>::get()? {
 			SalePhase::Market => Some(descending_price::<T>(block_number, &sale)),
 			SalePhase::Renewal | SalePhase::Settlement => AuctionClearingPrice::<T>::get(),
 		}
 	}
 
-	fn current_phase() -> SalePhase {
+	fn current_phase() -> Option<SalePhase> {
 		CurrentPhase::<T>::get()
 	}
 }

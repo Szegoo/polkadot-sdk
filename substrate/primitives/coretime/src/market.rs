@@ -222,7 +222,7 @@ pub trait Market {
 
 	/// Close the bid given its `BidId`.
 	///
-	/// In RFC-17, bids are binding and cannot be cancelled. This returns an error.
+	/// In RFC-17, bids are binding and cannot be cancelled.
 	fn close_bid(
 		id: Self::BidId,
 		maybe_check_owner: Option<Self::AccountId>,
@@ -248,5 +248,5 @@ pub trait MarketState: Market {
 
 	fn current_price(block_number: Self::BlockNumber) -> Option<Self::Balance>;
 
-	fn current_phase() -> SalePhase;
+	fn current_phase() -> Option<SalePhase>;
 }

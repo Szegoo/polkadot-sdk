@@ -201,7 +201,7 @@ impl<T: Config> Pallet<T> {
 		// During Renewal phase, `do_renew` returns `Sold` immediately, which is
 		// required for proper workplan and PotentialRenewal updates.
 		let phase_after = T::Market::current_phase();
-		if phase_before != SalePhase::Renewal && phase_after == SalePhase::Renewal {
+		if phase_before != Some(SalePhase::Renewal) && phase_after == Some(SalePhase::Renewal) {
 			if let Some(sale) = Self::market_sale_info() {
 				Self::renew_cores(&sale);
 			}
@@ -386,18 +386,6 @@ impl<T: Config> Pallet<T> {
 						task: record.task,
 						next_renewal: sale.region_end,
 					}),
-					Ok(DoRenewResult::BidPlaced { id }) => {
-						// We don't support auto-renewals when market doesn't allow purchasing
-						// regions right away.
-						Self::deposit_event(Event::<T>::AutoRenewalFailed {
-							core: record.core,
-							payer: Some(payer),
-						});
-
-						let _ = Self::do_close_bid(id, None);
-
-						None
-					},
 					Err(_) => {
 						Self::deposit_event(Event::<T>::AutoRenewalFailed {
 							core: record.core,
