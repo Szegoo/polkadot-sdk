@@ -167,7 +167,7 @@ impl<T: Config> Pallet<T> {
 		}
 	}
 
-	pub(crate) fn process_tick_action(action: TickAction<T, BidIdOf<T>>, meter: &mut WeightMeter) {
+	pub(crate) fn process_tick_action(action: TickAction<T>, meter: &mut WeightMeter) {
 		match action {
 			TickAction::BidClosed { id, owner } => {
 				meter.consume(T::WeightInfo::process_tick_action_bid_closed());

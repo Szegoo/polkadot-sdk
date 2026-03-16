@@ -16,7 +16,7 @@
 // limitations under the License.
 
 use core::cmp;
-use frame_support::{ensure, inherent::MakeFatalError, weights::WeightMeter};
+use frame_support::{ensure, weights::WeightMeter};
 use frame_system::pallet_prelude::AccountIdFor;
 use sp_arithmetic::FixedPointNumber;
 use sp_core::Get;
@@ -27,7 +27,7 @@ use crate::{
 	weights::WeightInfo,
 	AdaptPrice, AdaptedPrices, BalanceOf, BidIdOf, Config, ConfigRecordOf, Configuration,
 	CoreIndex, CoreMask, Pallet, PotentialRenewalId, RegionId, RelayBlockNumberOf, SaleInfo,
-	SaleInfoRecord, SaleInfoRecordOf, SalePerformance, Status, StatusRecord, Timeslice,
+	SaleInfoRecord, SaleInfoRecordOf, SalePerformance, Timeslice,
 };
 
 // TODO: Extend the documentation.
@@ -82,10 +82,7 @@ pub trait Market<T: Config> {
 	) -> Result<CloseBidResult<T>, Self::Error>;
 
 	/// Logic that gets called in `on_initialize` hook.
-	fn tick(
-		now: RelayBlockNumberOf<T>,
-		weight_meter: &mut WeightMeter,
-	) -> Vec<TickAction<T, Self::BidId>>;
+	fn tick(now: RelayBlockNumberOf<T>, weight_meter: &mut WeightMeter) -> Vec<TickAction<T>>;
 }
 
 pub trait CoreCountProvider<T: Config> {
@@ -121,8 +118,7 @@ pub struct CloseBidResult<T: Config> {
 	pub refund: BalanceOf<T>,
 }
 
-// TODO: Don't pass BidId as a separate generic.
-pub enum TickAction<T: Config, BidId> {
+pub enum TickAction<T: Config> {
 	SellRegion {
 		owner: T::AccountId,
 		/// How much was paid for this region in total.
@@ -139,7 +135,7 @@ pub enum TickAction<T: Config, BidId> {
 		who: T::AccountId,
 	},
 	BidClosed {
-		id: BidId,
+		id: BidIdOf<T>,
 		owner: T::AccountId,
 	},
 	SaleRotated {
@@ -295,7 +291,7 @@ impl<T: Config> Market<T> for Pallet<T> {
 	fn tick(
 		block_number: RelayBlockNumberOf<T>,
 		weight_meter: &mut WeightMeter,
-	) -> Vec<TickAction<T, Self::BidId>> {
+	) -> Vec<TickAction<T>> {
 		let (Some(config), Some(core_count)) =
 			(Configuration::<T>::get(), Self::CoreCount::core_count())
 		else {
@@ -322,7 +318,7 @@ pub(crate) fn sale_rotated<T: Config, M: Market<T>>(
 	config: &ConfigRecordOf<T>,
 	core_count: CoreIndex,
 	block_number: RelayBlockNumberOf<T>,
-	actions: &mut Vec<TickAction<T, BidIdOf<T>>>,
+	actions: &mut Vec<TickAction<T>>,
 ) {
 	let reserved_cores = M::CoreCount::reserved_core_count();
 	let (new_prices, new_sale) =
