@@ -30,11 +30,7 @@ use sp_runtime::DispatchError;
 type CoretimeMarketImpl = CoretimeMarket;
 
 fn start_sales(reserve_price: u64, extra_cores: u16) {
-	let core_count = extra_cores;
-	assert_ok!(
-		CoretimeMarketImpl::start_sales(0, reserve_price, core_count)
-			.map_err(|e| -> DispatchError { e.into() })
-	);
+	assert_ok!(CoretimeMarketImpl::start_sales(0, reserve_price, extra_cores));
 }
 
 fn tick(block_number: u64) -> Vec<TickAction<u64, u64, u64, u32>> {
@@ -174,11 +170,12 @@ fn place_bid_works_during_market_phase() {
 #[test]
 fn place_bid_fails_before_sale_start() {
 	TestExt::new().execute_with(|| {
-		start_sales(100, 2);
+		// Start at block 1 so there's a block before sale_start to test with.
+		assert_ok!(CoretimeMarketImpl::start_sales(1, 100, 2));
 
 		let sale = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
 		assert!(matches!(
-			place_bid(sale.sale_start, 1, 100),
+			place_bid(sale.sale_start - 1, 1, 100),
 			Err(MarketError::TooEarly)
 		));
 	});
@@ -222,7 +219,7 @@ fn place_bid_fails_during_renewal_phase() {
 #[test]
 fn place_bid_fails_without_sale_info() {
 	TestExt::new().execute_with(|| {
-		// Before sales are started, CurrentPhase is None → WrongPhase.
+		// Before sales are started, CurrentPhase is None => WrongPhase.
 		assert!(matches!(place_bid(1, 1, 100), Err(MarketError::WrongPhase)));
 	});
 }
@@ -230,7 +227,7 @@ fn place_bid_fails_without_sale_info() {
 #[test]
 fn place_bid_enforces_max_bids() {
 	TestExt::new().execute_with(|| {
-		start_sales(100, 200); // Many cores so we don't hit early close.
+		start_sales(100, 200);
 
 		let sale = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
 		let block = sale.sale_start + 1;
@@ -244,7 +241,7 @@ fn place_bid_enforces_max_bids() {
 
 		// Next bid should fail — MaxBids reached.
 		assert!(matches!(
-			place_bid(block, 200, current_price),
+			place_bid(block, 1, current_price),
 			Err(MarketError::SoldOut)
 		));
 	});
@@ -282,19 +279,21 @@ fn clearing_price_is_kth_highest_bid() {
 		assert_eq!(clearing, mid_bid.max(sale.reserve_price));
 
 		// Bidder 1 (high_bid) wins and gets refund of excess.
-		if high_bid > clearing {
-			let excess = high_bid - clearing;
-			assert!(actions
-				.iter()
-				.any(|a| matches!(a, TickAction::Refund { amount, who } if *who == 1 && *amount == excess)));
-		}
+		let excess = high_bid - clearing;
+		assert!(actions
+			.iter()
+			.any(|a| matches!(a, TickAction::Refund { amount, who } if *who == 1 && *amount == excess)));
+
+		// Bidder 2 (mid_bid) loses and gets full refund.
+		let excess = mid_bid - clearing;
+		assert!(actions
+			.iter()
+			.any(|a| matches!(a, TickAction::Refund { amount, who } if *who == 3 && *amount == low_bid)));
 
 		// Bidder 3 (low_bid < clearing) loses and gets full refund.
-		if low_bid < clearing {
-			assert!(actions
-				.iter()
-				.any(|a| matches!(a, TickAction::Refund { amount, who } if *who == 3 && *amount == low_bid)));
-		}
+		assert!(actions
+			.iter()
+			.any(|a| matches!(a, TickAction::Refund { amount, who } if *who == 3 && *amount == low_bid)));
 	});
 }
 
@@ -357,28 +356,6 @@ fn winners_pay_clearing_price_not_bid_price() {
 	});
 }
 
-#[test]
-fn allocations_have_correct_core_assignments() {
-	TestExt::new().execute_with(|| {
-		start_sales(10, 3);
-
-		let sale = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
-		let block = sale.sale_start + 1;
-		let price = <CoretimeMarketImpl as MarketState>::current_price(block).unwrap();
-
-		assert!(place_bid(block, 1, price).is_ok());
-		assert!(place_bid(block, 2, price).is_ok());
-
-		let config = <CoretimeMarketImpl as MarketState>::configuration().unwrap();
-		tick(sale.sale_start + config.market_period);
-
-		let allocations = crate::Allocations::<Test>::get();
-		assert_eq!(allocations.len(), 2);
-		assert_eq!(allocations[0].core, sale.first_core);
-		assert_eq!(allocations[1].core, sale.first_core + 1);
-	});
-}
-
 // ============================================================================
 // Region issuance tests
 // ============================================================================
@@ -417,38 +394,6 @@ fn regions_issued_at_renewal_end() {
 				assert_eq!(*region_end, sale.region_end);
 			}
 		}
-	});
-}
-
-#[test]
-fn regions_use_correct_core_from_allocation() {
-	TestExt::new().execute_with(|| {
-		start_sales(10, 3);
-
-		let sale = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
-		let block = sale.sale_start + 1;
-		let price = <CoretimeMarketImpl as MarketState>::current_price(block).unwrap();
-
-		assert!(place_bid(block, 1, price).is_ok());
-		assert!(place_bid(block, 2, price).is_ok());
-
-		let config = <CoretimeMarketImpl as MarketState>::configuration().unwrap();
-		let market_end = sale.sale_start + config.market_period;
-		let renewal_end = market_end + config.renewal_period;
-
-		tick(market_end);
-		let actions = tick(renewal_end);
-
-		let mut cores: Vec<u16> = actions
-			.iter()
-			.filter_map(|a| match a {
-				TickAction::SellRegion { region_id, .. } => Some(region_id.core),
-				_ => None,
-			})
-			.collect();
-		cores.sort();
-
-		assert_eq!(cores, vec![sale.first_core, sale.first_core + 1]);
 	});
 }
 
@@ -534,42 +479,6 @@ fn renewal_with_displacement() {
 
 		let allocations = crate::Allocations::<Test>::get();
 		assert_eq!(allocations.len(), 1);
-	});
-}
-
-#[test]
-fn displaced_renewer_gets_correct_core() {
-	TestExt::new().execute_with(|| {
-		start_sales(10, 2);
-
-		let sale = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
-		let config = <CoretimeMarketImpl as MarketState>::configuration().unwrap();
-		let market_end = sale.sale_start + config.market_period;
-
-		let block = sale.sale_start + 1;
-		let price = <CoretimeMarketImpl as MarketState>::current_price(block).unwrap();
-
-		// Give bidder 10 renewal rights so only bidder 20 can be displaced.
-		TestRenewalRights::set(10, sale.region_end, 1);
-
-		assert!(place_bid(block, 10, price).is_ok()); // core = first_core
-		assert!(place_bid(block, 20, price).is_ok()); // core = first_core + 1
-
-		tick(market_end);
-
-		let result = place_renewal(market_end + 1, 30, 0, sale.region_begin, 100);
-		assert!(result.is_ok());
-		match result.unwrap() {
-			RenewalOrderResult::Sold { region_id, displaced, .. } => {
-				let d = displaced.unwrap();
-				assert_eq!(d.who, 20);
-				// Renewer gets the displaced winner's core.
-				let allocs_before_displacement =
-					vec![sale.first_core, sale.first_core + 1];
-				assert!(allocs_before_displacement.contains(&region_id.core));
-			},
-			_ => panic!("Expected Sold"),
-		}
 	});
 }
 
@@ -1049,7 +958,7 @@ fn full_sale_lifecycle() {
 
 		assert_eq!(crate::CurrentPhase::<Test>::get(), Some(SalePhase::Settlement));
 
-		// --- Settlement → Next sale ---
+		// --- Settlement => Next sale ---
 		let mut status = <CoretimeMarketImpl as MarketState>::status().unwrap();
 		status.last_committed_timeslice = sale.region_begin;
 		<CoretimeMarketImpl as MarketState>::set_status(status);

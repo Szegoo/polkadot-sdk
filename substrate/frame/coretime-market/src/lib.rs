@@ -395,7 +395,7 @@ impl<T: Config> Market for Pallet<T> {
 	) -> Result<OrderResult<Self::Balance, Self::BidId>, Self::Error> {
 		ensure!(CurrentPhase::<T>::get() == Some(SalePhase::Market), MarketError::WrongPhase);
 		let sale = SaleInfo::<T>::get().ok_or(MarketError::NoSales)?;
-		ensure!(block_number > sale.sale_start, MarketError::TooEarly);
+		ensure!(block_number >= sale.sale_start, MarketError::TooEarly);
 
 		let bid_count = NextBidId::<T>::get();
 		ensure!(bid_count < T::MaxBids::get(), MarketError::SoldOut);
