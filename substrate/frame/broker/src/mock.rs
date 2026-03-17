@@ -231,7 +231,9 @@ impl pallet_coretime_market::Config for Test {
 
 impl crate::Config for Test {
 	type RuntimeEvent = RuntimeEvent;
-	type Currency = ItemOf<TestFungibles<(), u64, (), ConstU64<0>, ()>, (), u64>;
+	type Currency =
+		ItemOf<TestFungibles<(), u64, (), ConstU64<0>, RuntimeHoldReason>, (), u64>;
+	type RuntimeHoldReason = RuntimeHoldReason;
 	type OnRevenue = IntoZero;
 	type TimeslicePeriod = ConstU64<2>;
 	type MaxLeasedCores = ConstU32<5>;

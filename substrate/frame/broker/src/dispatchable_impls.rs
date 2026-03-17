@@ -146,15 +146,12 @@ impl<T: Config> Pallet<T> {
 		match T::Market::place_order(now, &who, bid_price).map_err(Into::into)? {
 			OrderResult::BidPlaced { id, bid_price } => {
 				Self::lock_funds(&who, bid_price)?;
-
 				Self::deposit_event(Event::BidPlaced { bid_id: id, price: bid_price });
 			},
 			OrderResult::Sold { price, region_id, region_end } => {
 				Self::charge(&who, price)?;
-
 				Self::issue(region_id, region_end, Some(who.clone()), Some(price));
 				let duration = region_end.saturating_sub(region_id.begin);
-
 				Self::deposit_event(Event::Purchased { who, region_id, price, duration });
 			},
 		};
@@ -226,6 +223,22 @@ impl<T: Config> Pallet<T> {
 				Ok(DoRenewResult::Renewed { new_core: region_id.core })
 			},
 		}
+	}
+
+	pub(crate) fn do_raise_bid(
+		who: T::AccountId,
+		bid_id: BidIdOf<T>,
+		new_price: BalanceOf<T>,
+	) -> DispatchResult {
+		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
+		let additional =
+			T::Market::raise_bid(now, bid_id, &who, new_price).map_err(Into::into)?;
+
+		// Lock the additional funds needed for the raised bid.
+		Self::lock_funds(&who, additional)?;
+
+		Self::deposit_event(Event::BidRaised { bid_id, new_price, additional });
+		Ok(())
 	}
 
 	pub(crate) fn do_close_bid(

@@ -2958,6 +2958,54 @@ fn do_purchase_batch(who: u64, count: usize) -> Vec<RegionId> {
 
 /// Place a bid in the current auction and advance through settlement + finalization
 /// to get the region issued. Returns the region ID from the `Purchased` event.
+#[test]
+fn raise_bid_works() {
+	TestExt::new().endow(1, 1000).execute_with(|| {
+		assert_ok!(Broker::do_start_sales(100, 1));
+		advance_to(2);
+
+		// Get current descending price, bid below it to leave room to raise.
+		let current_price =
+			<CoretimeMarket as sp_coretime::MarketState>::current_price(2).unwrap();
+		let initial_bid = current_price / 2;
+
+		let initial_balance = balance(1);
+		assert_ok!(Broker::do_purchase(1, initial_bid));
+		let held_after_bid = initial_balance - balance(1);
+		assert_eq!(held_after_bid, initial_bid);
+
+		// First bid gets ID 0.
+		let bid_id: u32 = 0;
+
+		// Raise the bid to the current price.
+		let new_price = current_price;
+		let additional = new_price - initial_bid;
+		assert_ok!(Broker::do_raise_bid(1, bid_id, new_price));
+		let held_after_raise = initial_balance - balance(1);
+		assert_eq!(held_after_raise, new_price);
+
+		// Verify the event was emitted.
+		System::assert_has_event(
+			Event::BidRaised { bid_id, new_price, additional }.into(),
+		);
+	});
+}
+
+#[test]
+fn raise_bid_fails_for_wrong_owner() {
+	TestExt::new().endow(1, 1000).endow(2, 1000).execute_with(|| {
+		assert_ok!(Broker::do_start_sales(100, 1));
+		advance_to(2);
+		assert_ok!(Broker::do_purchase(1, u64::max_value()));
+
+		// Account 2 tries to raise account 1's bid.
+		assert_noop!(
+			Broker::do_raise_bid(2, 0, 500),
+			DispatchError::Other("BidNotExist"),
+		);
+	});
+}
+
 fn do_purchase_and_get_region_id(
 	who: <Test as frame_system::Config>::AccountId,
 	price_limit: u64,

@@ -218,6 +218,8 @@ impl<T: Config> Pallet<T> {
 			TickAction::SellRegion { owner, paid, region_id, region_end } => {
 				meter.consume(T::WeightInfo::process_tick_action_sell_region());
 
+				// Release the held funds and charge the clearing price as revenue.
+				Self::settle_held(&owner, paid).defensive_ok();
 				Self::issue(region_id, region_end, Some(owner.clone()), Some(paid));
 				let duration = region_end.saturating_sub(region_id.begin);
 				Self::deposit_event(Event::Purchased {

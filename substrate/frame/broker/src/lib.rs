@@ -57,6 +57,7 @@ pub mod pallet {
 		pallet_prelude::{DispatchResult, DispatchResultWithPostInfo, *},
 		traits::{
 			fungible::{Balanced, Credit, Mutate},
+			tokens::fungible::hold::Mutate as FunHoldMutate,
 			BuildGenesisConfig, EnsureOrigin, OnUnbalanced,
 		},
 		PalletId,
@@ -79,7 +80,12 @@ pub mod pallet {
 		type WeightInfo: WeightInfo;
 
 		/// Currency used to pay for Coretime.
-		type Currency: Mutate<Self::AccountId> + Balanced<Self::AccountId>;
+		type Currency: Mutate<Self::AccountId>
+			+ Balanced<Self::AccountId>
+			+ FunHoldMutate<Self::AccountId, Reason = Self::RuntimeHoldReason>;
+
+		/// Overarching hold reason.
+		type RuntimeHoldReason: From<HoldReason>;
 
 		/// The origin test needed for administrating this pallet.
 		type AdminOrigin: EnsureOrigin<Self::RuntimeOrigin>;
@@ -132,6 +138,14 @@ pub mod pallet {
 		/// Needed to prevent spam attacks.
 		#[pallet::constant]
 		type MinimumCreditPurchase: Get<BalanceOf<Self>>;
+	}
+
+	/// A reason for placing a hold on funds.
+	#[pallet::composite_enum]
+	pub enum HoldReason {
+		/// Funds locked for a coretime auction bid.
+		#[codec(index = 0)]
+		CoretimeBid,
 	}
 
 	/// The Polkadot Core reservations (generally tasked with the maintenance of System Chains).
@@ -506,6 +520,15 @@ pub mod pallet {
 			bid_id: BidIdOf<T>,
 			/// Bid amount.
 			price: BalanceOf<T>,
+		},
+		/// A bid was raised to a higher price.
+		BidRaised {
+			/// Unique ID of the bid that was raised.
+			bid_id: BidIdOf<T>,
+			/// The new bid price.
+			new_price: BalanceOf<T>,
+			/// The additional amount locked.
+			additional: BalanceOf<T>,
 		},
 		/// The bid was removed.
 		BidClosed {
@@ -1076,6 +1099,27 @@ pub mod pallet {
 		) -> DispatchResult {
 			T::AdminOrigin::ensure_origin_or_root(origin)?;
 			Self::do_transfer(region_id, None, new_owner)?;
+			Ok(())
+		}
+
+		/// Raise an existing bid to a higher price.
+		///
+		/// The new price must be higher than the current bid and at most the current
+		/// descending auction price. The caller must have enough funds to cover the
+		/// additional amount (new_price - old_price).
+		///
+		/// - `origin`: Must be the Signed origin of the account which placed the bid.
+		/// - `bid_id`: The ID of the bid to raise.
+		/// - `new_price`: The new (higher) bid price.
+		#[pallet::call_index(29)]
+		#[pallet::weight(T::WeightInfo::purchase())]
+		pub fn raise_bid(
+			origin: OriginFor<T>,
+			bid_id: BidIdOf<T>,
+			new_price: BalanceOf<T>,
+		) -> DispatchResult {
+			let who = ensure_signed(origin)?;
+			Self::do_raise_bid(who, bid_id, new_price)?;
 			Ok(())
 		}
 
