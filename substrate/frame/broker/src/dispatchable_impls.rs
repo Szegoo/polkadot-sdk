@@ -120,7 +120,6 @@ impl<T: Config> Pallet<T> {
 
 		Self::deposit_event(Event::<T>::SalesStarted { price: reserve_price, core_count });
 
-		// TODO: Don't read status here.
 		let status = Self::market_status().ok_or(Error::<T>::Uninitialized)?;
 		Self::rotate_sale(
 			&sales_started.old_sale,
@@ -138,8 +137,6 @@ impl<T: Config> Pallet<T> {
 		price_limit: BalanceOf<T>,
 	) -> Result<(), DispatchError> {
 		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
-		// In the descending clock auction, bid at the current price (clamped to the
-		// user's maximum willingness to pay).
 		let current_price =
 			T::Market::current_price(now).ok_or(Error::<T>::NoSales)?;
 		let bid_price = price_limit.min(current_price);
@@ -593,8 +590,7 @@ impl<T: Config> Pallet<T> {
 		let mut deferred_renewal = false;
 
 		// Check if the core is expiring in the next bulk period; if so, we will renew it now
-		// if we're in the Renewal phase. During Market phase, defer to renew_cores which
-		// runs at the Market→Renewal transition.
+		// if we're in the Renewal phase.
 		if PotentialRenewals::<T>::get(PotentialRenewalId { core, when: sale.region_begin })
 			.is_some()
 		{
