@@ -52,29 +52,38 @@ impl<T: Config> Pallet<T> {
 			meter.consume(T::WeightInfo::process_revenue());
 		}
 
-		// First, advance the committed timeslice in storage so the market can detect
+		// Advance the committed timeslice in storage so the market can detect
 		// when a sale rotation is needed.
-		let commit_timeslice = Self::advance_committed_timeslice(&mut meter);
+		let commit_timeslice = Self::advance_committed_timeslice();
 
-		// Process market logic (e.g., sale rotation) which may set up Workplan entries
-		// for the newly committed timeslice.
+		// Process market logic (e.g., sale rotation) which may set up Workplan
+		// entries for the newly committed timeslice.
 		Self::process_market_logic(&mut meter);
 
-		// Now commit the timeslice workloads: process pool accounting and core schedules.
-		// This must happen after market logic so that any Workplan entries created by
-		// sale rotation are available for process_core_schedule to read.
+		// Commit the timeslice workloads after market logic so that any Workplan
+		// entries created by sale rotation are available.
 		if let Some(timeslice) = commit_timeslice {
-			Self::commit_timeslice(timeslice, &mut meter);
+			if let Some(mut status) = Self::market_status() {
+				Self::timeslice_commited(timeslice, &mut status, &mut meter);
+				Self::set_market_status(status);
+			}
 		}
 
-		Self::advance_last_timeslice(&mut meter);
+		// Advance last_timeslice tracking.
+		if let Some(mut status) = Self::market_status() {
+			if status.last_timeslice < Self::current_timeslice() {
+				status.last_timeslice.saturating_inc();
+				Self::last_timeslice_changed(&status, &mut meter);
+				Self::set_market_status(status);
+			}
+		}
 
 		meter.consumed()
 	}
 
 	/// Advance the committed timeslice counter in storage if a new timeslice is ready.
 	/// Returns the timeslice that was committed, if any.
-	pub(crate) fn advance_committed_timeslice(_meter: &mut WeightMeter) -> Option<Timeslice> {
+	fn advance_committed_timeslice() -> Option<Timeslice> {
 		let config = Self::market_configuration()?;
 		let mut status = Self::market_status()?;
 
@@ -85,41 +94,30 @@ impl<T: Config> Pallet<T> {
 		Some(commit_timeslice)
 	}
 
-	/// Commit workloads for a timeslice: process pool accounting and schedule cores.
-	pub(crate) fn commit_timeslice(timeslice: Timeslice, meter: &mut WeightMeter) {
-		let Some(mut status) = Self::market_status() else { return };
+	fn last_timeslice_changed(status: &StatusRecord, meter: &mut WeightMeter) {
+		let rc_block = T::TimeslicePeriod::get() * status.last_timeslice.into();
+		T::Coretime::request_revenue_info_at(rc_block);
+		meter.consume(T::WeightInfo::request_revenue_info_at());
 
+		T::Coretime::on_new_timeslice(status.last_timeslice);
+		meter.consume(T::WeightInfo::on_new_timeslice());
+	}
+
+	fn timeslice_commited(
+		timeslice: Timeslice,
+		status: &mut StatusRecord,
+		meter: &mut WeightMeter,
+	) {
 		meter.consume(T::WeightInfo::process_tick_action_timeslice_commited(
 			status.core_count.into(),
 		));
 
-		Self::process_pool(timeslice, &mut status);
+		Self::process_pool(timeslice, status);
 
 		let timeslice_period = T::TimeslicePeriod::get();
 		let rc_begin = RelayBlockNumberOf::<T>::from(timeslice) * timeslice_period;
 		for core in 0..status.core_count {
 			Self::process_core_schedule(timeslice, rc_begin, core);
-		}
-
-		Self::set_market_status(status);
-	}
-
-	/// Advance last_timeslice tracking: request revenue info and notify on new timeslice.
-	pub(crate) fn advance_last_timeslice(meter: &mut WeightMeter) {
-		let Some(mut status) = Self::market_status() else { return };
-
-		let current_timeslice = Self::current_timeslice();
-		if status.last_timeslice < current_timeslice {
-			status.last_timeslice.saturating_inc();
-			let timeslice_period = T::TimeslicePeriod::get();
-			let rc_block = timeslice_period * status.last_timeslice.into();
-
-			T::Coretime::request_revenue_info_at(rc_block);
-			meter.consume(T::WeightInfo::request_revenue_info_at());
-			T::Coretime::on_new_timeslice(status.last_timeslice);
-			meter.consume(T::WeightInfo::on_new_timeslice());
-
-			Self::set_market_status(status);
 		}
 	}
 
