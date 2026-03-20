@@ -23,6 +23,7 @@ pub use pallet::*;
 mod benchmarking;
 mod coretime_interface;
 mod dispatchable_impls;
+pub mod market;
 #[cfg(test)]
 mod mock;
 mod nonfungible_impl;

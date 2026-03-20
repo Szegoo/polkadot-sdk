@@ -142,8 +142,9 @@ pub enum TickAction<Balance, BlockNumber, AccountId, BidId> {
 		new_prices: AdaptedPrices<Balance>,
 		start_price: Balance,
 	},
-	/// The market has transitioned into a phase where auto-renewals should be
-	/// processed. The broker should call its renewal logic when it receives this.
+	/// The market signals that auto-renewals should be processed now.
+	/// Each market implementation decides when to emit this (e.g. after auction
+	/// settlement, before sale rotation, etc.).
 	ProcessRenewals,
 }
 
