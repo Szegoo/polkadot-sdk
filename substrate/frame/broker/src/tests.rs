@@ -18,6 +18,7 @@
 #![cfg(test)]
 
 use crate::{mock::*, *};
+use pallet_coretime_market::SaleInfoRecord;
 use frame_support::{
 	assert_err, assert_noop, assert_ok,
 	traits::nonfungible::{Inspect as NftInspect, Mutate, Transfer},

@@ -15,7 +15,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{CoreIndex, SaleInfoRecord};
+use crate::CoreIndex;
 use sp_runtime::{FixedPointNumber, FixedPointOperand, FixedU64};
 
 /// Performance of a past sale.
@@ -34,17 +34,6 @@ pub struct SalePerformance<Balance> {
 }
 
 impl<Balance: Copy> SalePerformance<Balance> {
-	/// Construct performance via data from a `SaleInfoRecord`.
-	pub fn from_sale<BlockNumber>(record: &SaleInfoRecord<Balance, BlockNumber>) -> Self {
-		Self {
-			clearing_price: record.clearing_price,
-			reserve_price: record.reserve_price,
-			ideal_cores_sold: record.ideal_cores_sold,
-			cores_offered: record.cores_offered,
-			cores_sold: record.cores_sold,
-		}
-	}
-
 	#[cfg(test)]
 	fn new(clearing_price: Option<Balance>, reserve_price: Balance) -> Self {
 		Self {

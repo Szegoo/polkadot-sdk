@@ -22,8 +22,7 @@ use sp_runtime::DispatchError;
 use sp_weights::WeightMeter;
 
 use crate::{
-	AdaptedPrices, ConfigRecord, CoreIndex, PotentialRenewalId, RegionId, SaleInfoRecord,
-	StatusRecord, Timeslice,
+	AdaptedPrices, CoreIndex, PotentialRenewalId, RegionId, StatusRecord, Timeslice,
 };
 
 /// Trait for providing the reserved core count.
@@ -65,55 +64,6 @@ pub trait MarketSaleInfo {
 	fn cores_offered(&self) -> CoreIndex;
 	fn first_core(&self) -> CoreIndex;
 	fn cores_sold(&self) -> CoreIndex;
-}
-
-// Implement market traits for the concrete types.
-
-impl<BlockNumber: Clone> MarketConfig for ConfigRecord<BlockNumber>
-where
-	BlockNumber: sp_arithmetic::traits::Zero,
-{
-	type BlockNumber = BlockNumber;
-
-	fn advance_notice(&self) -> BlockNumber {
-		self.advance_notice.clone()
-	}
-	fn region_length(&self) -> Timeslice {
-		self.region_length
-	}
-	fn contribution_timeout(&self) -> Timeslice {
-		self.contribution_timeout
-	}
-	fn validate(&self) -> Result<(), ()> {
-		ConfigRecord::validate(self)
-	}
-}
-
-impl<Balance: Clone, BlockNumber: Clone> MarketSaleInfo for SaleInfoRecord<Balance, BlockNumber> {
-	type Balance = Balance;
-	type BlockNumber = BlockNumber;
-
-	fn sale_start(&self) -> BlockNumber {
-		self.sale_start.clone()
-	}
-	fn region_begin(&self) -> Timeslice {
-		self.region_begin
-	}
-	fn region_end(&self) -> Timeslice {
-		self.region_end
-	}
-	fn ideal_cores_sold(&self) -> CoreIndex {
-		self.ideal_cores_sold
-	}
-	fn cores_offered(&self) -> CoreIndex {
-		self.cores_offered
-	}
-	fn first_core(&self) -> CoreIndex {
-		self.first_core
-	}
-	fn cores_sold(&self) -> CoreIndex {
-		self.cores_sold
-	}
 }
 
 /// Errors specific to market operations.

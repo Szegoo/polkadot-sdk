@@ -18,6 +18,7 @@
 #![cfg(test)]
 
 use crate::{test_fungibles::TestFungibles, *};
+use pallet_coretime_market::ConfigRecord;
 use alloc::collections::btree_map::BTreeMap;
 use frame_support::{
 	assert_ok, derive_impl, ensure, ord_parameter_types, parameter_types,

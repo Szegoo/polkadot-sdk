@@ -22,9 +22,10 @@ use frame_support::assert_ok;
 use frame_support::weights::WeightMeter;
 use sp_arithmetic::Perbill;
 use crate::SalePhase;
+use crate::{ConfigRecord, SaleInfoRecord};
 use sp_coretime::{
-	ConfigRecord, CoreMask, Market, MarketError, MarketState, OrderResult, PotentialRenewalId,
-	RenewalOrderResult, SaleInfoRecord, TickAction,
+	CoreMask, Market, MarketError, MarketState, OrderResult, PotentialRenewalId,
+	RenewalOrderResult, TickAction,
 };
 use sp_runtime::DispatchError;
 

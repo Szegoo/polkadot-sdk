@@ -31,7 +31,7 @@ pub use market::*;
 
 use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
 use scale_info::TypeInfo;
-use sp_arithmetic::Perbill;
+
 
 /// Index of a Polkadot Core.
 pub type CoreIndex = u16;
@@ -109,73 +109,6 @@ pub struct PotentialRenewalId {
 	pub core: CoreIndex,
 	/// The point in time that the renewable workload on `core` ends and a fresh renewal may begin.
 	pub when: Timeslice,
-}
-
-/// The status of a Bulk Coretime Sale.
-#[derive(Encode, Decode, DecodeWithMemTracking, Clone, PartialEq, Eq, Debug, TypeInfo, MaxEncodedLen)]
-pub struct SaleInfoRecord<Balance, BlockNumber> {
-	/// The relay block number at which the sale (Market phase) starts.
-	pub sale_start: BlockNumber,
-	/// The opening price of the descending Dutch auction.
-	pub opening_price: Balance,
-	/// The reserve price (floor price of the descending auction).
-	pub reserve_price: Balance,
-	/// The clearing price (uniform price all winners pay). Set after auction settlement.
-	pub clearing_price: Option<Balance>,
-	/// The first timeslice of the Regions which are being sold in this sale.
-	pub region_begin: Timeslice,
-	/// The timeslice on which the Regions which are being sold in the sale terminate. (i.e. One
-	/// after the last timeslice which the Regions control.)
-	pub region_end: Timeslice,
-	/// The number of cores we want to sell, ideally. Selling this amount would result in no
-	/// change to the price for the next sale.
-	pub ideal_cores_sold: CoreIndex,
-	/// Number of cores which are/have been offered for sale.
-	pub cores_offered: CoreIndex,
-	/// The index of the first core which is for sale. Core of Regions which are sold have
-	/// incrementing indices from this.
-	pub first_core: CoreIndex,
-	/// Number of cores which have been sold; never more than cores_offered.
-	pub cores_sold: CoreIndex,
-}
-
-/// Configuration of the coretime system.
-#[derive(
-	Encode, Decode, DecodeWithMemTracking, Clone, PartialEq, Eq, Debug, TypeInfo, MaxEncodedLen,
-)]
-pub struct ConfigRecord<BlockNumber> {
-	/// The number of Relay-chain blocks in advance which scheduling should be fixed and the
-	/// `Coretime::assign` API used to inform the Relay-chain.
-	pub advance_notice: BlockNumber,
-	/// The length in blocks of the Market (auction) phase.
-	pub market_period: BlockNumber,
-	/// The length in blocks of the Renewal phase.
-	pub renewal_period: BlockNumber,
-	/// The length in timeslices of Regions which are up for sale in forthcoming sales.
-	pub region_length: Timeslice,
-	/// The proportion of cores available for sale which should be sold.
-	pub ideal_bulk_proportion: Perbill,
-	/// An artificial limit to the number of cores which are allowed to be sold. If `Some` then
-	/// no more cores will be sold than this.
-	pub limit_cores_offered: Option<CoreIndex>,
-	/// Penalty applied to renewers who didn't win in the auction (when market is oversubscribed).
-	pub penalty: Perbill,
-	/// The duration by which rewards for contributions to the InstaPool must be collected.
-	pub contribution_timeout: Timeslice,
-}
-
-impl<BlockNumber> ConfigRecord<BlockNumber>
-where
-	BlockNumber: sp_arithmetic::traits::Zero,
-{
-	/// Check the config for basic validity constraints.
-	pub fn validate(&self) -> Result<(), ()> {
-		if self.market_period.is_zero() {
-			return Err(());
-		}
-
-		Ok(())
-	}
 }
 
 /// General status of the system.

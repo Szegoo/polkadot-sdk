@@ -248,8 +248,10 @@ pub mod v4 {
 	impl<T: Config, BlockConversion: BlockToRelayHeightConversion<T>> UncheckedOnRuntimeUpgrade
 		for MigrateToV4Impl<T, BlockConversion>
 	where
-		ConfigRecordOf<T>: From<ConfigRecord<RelayBlockNumberOf<T>>>,
-		SaleInfoRecordOf<T>: From<SaleInfoRecord<BalanceOf<T>, RelayBlockNumberOf<T>>>,
+		ConfigRecordOf<T>:
+			From<crate::market::LegacyConfigRecord<RelayBlockNumberOf<T>>>,
+		SaleInfoRecordOf<T>:
+			From<crate::market::LegacySaleInfoRecord<BalanceOf<T>, RelayBlockNumberOf<T>>>,
 	{
 		#[cfg(feature = "try-runtime")]
 		fn pre_upgrade() -> Result<Vec<u8>, sp_runtime::TryRuntimeError> {
@@ -298,14 +300,14 @@ pub mod v4 {
 						config_record.leadin_length,
 					);
 
-				let updated_config_record = ConfigRecord {
-					market_period: updated_interlude_length,
-					renewal_period: updated_leadin_length,
+				let updated_config_record = crate::market::LegacyConfigRecord {
 					advance_notice: config_record.advance_notice,
+					interlude_length: updated_interlude_length,
+					leadin_length: updated_leadin_length,
 					region_length: config_record.region_length,
 					ideal_bulk_proportion: config_record.ideal_bulk_proportion,
 					limit_cores_offered: config_record.limit_cores_offered,
-					penalty: config_record.renewal_bump,
+					renewal_bump: config_record.renewal_bump,
 					contribution_timeout: config_record.contribution_timeout,
 				};
 				T::Market::set_configuration(updated_config_record.into());
@@ -318,11 +320,11 @@ pub mod v4 {
 				let updated_sale_start: RelayBlockNumberOf<T> =
 					BlockConversion::convert_block_number_to_relay_height(sale_info.sale_start);
 
-				let updated_sale_info = SaleInfoRecord {
+				let updated_sale_info = crate::market::LegacySaleInfoRecord {
 					sale_start: updated_sale_start,
-					opening_price: sale_info.price,
-					reserve_price: sale_info.price,
-					clearing_price: sale_info.sellout_price,
+					leadin_length: BlockConversion::convert_block_length_to_relay_length(sale_info.leadin_length),
+					end_price: sale_info.price,
+					sellout_price: sale_info.sellout_price,
 					region_begin: sale_info.region_begin,
 					region_end: sale_info.region_end,
 					ideal_cores_sold: sale_info.ideal_cores_sold,
