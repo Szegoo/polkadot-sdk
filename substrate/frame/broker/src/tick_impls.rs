@@ -261,15 +261,15 @@ impl<T: Config> Pallet<T> {
 		// InstaPool. Skip cores that already have workplan entries (e.g., from renewals
 		// exercised during the Renewal phase).
 		let mut old_pooled: SignedCoreMaskBitCount = 0;
-		for i in old_sale.cores_sold..old_sale.cores_offered {
-			let core = old_sale.first_core + i;
-			if !Workplan::<T>::contains_key((old_sale.region_begin, core)) {
+		for i in old_sale.cores_sold()..old_sale.cores_offered() {
+			let core = old_sale.first_core() + i;
+			if !Workplan::<T>::contains_key((old_sale.region_begin(), core)) {
 				old_pooled.saturating_accrue(80);
-				Workplan::<T>::insert((old_sale.region_begin, core), &just_pool);
+				Workplan::<T>::insert((old_sale.region_begin(), core), &just_pool);
 			}
 		}
-		InstaPoolIo::<T>::mutate(old_sale.region_begin, |r| r.system.saturating_accrue(old_pooled));
-		InstaPoolIo::<T>::mutate(old_sale.region_end, |r| r.system.saturating_reduce(old_pooled));
+		InstaPoolIo::<T>::mutate(old_sale.region_begin(), |r| r.system.saturating_accrue(old_pooled));
+		InstaPoolIo::<T>::mutate(old_sale.region_end(), |r| r.system.saturating_reduce(old_pooled));
 
 		// Set workload for the reserved (system, probably) workloads.
 		let mut first_core = 0;
@@ -282,25 +282,25 @@ impl<T: Config> Pallet<T> {
 				.sum();
 			total_pooled.saturating_accrue(parts as i32);
 
-			Workplan::<T>::insert((new_sale.region_begin, first_core), &schedule);
+			Workplan::<T>::insert((new_sale.region_begin(), first_core), &schedule);
 			first_core.saturating_inc();
 		}
 
 		// Insert ForceReservations at the first free core from the old sale.
-		let mut force_core = old_sale.first_core + old_sale.cores_sold;
+		let mut force_core = old_sale.first_core() + old_sale.cores_sold();
 		for schedule in ForceReservations::<T>::take() {
 			if force_core >= status.core_count {
 				Self::deposit_event(Event::<T>::ForceReservationFailed { schedule });
 				continue;
 			}
-			Workplan::<T>::insert((old_sale.region_begin, force_core), &schedule);
+			Workplan::<T>::insert((old_sale.region_begin(), force_core), &schedule);
 			force_core.saturating_inc();
 		}
 
-		InstaPoolIo::<T>::mutate(new_sale.region_begin, |r| {
+		InstaPoolIo::<T>::mutate(new_sale.region_begin(), |r| {
 			r.system.saturating_accrue(total_pooled)
 		});
-		InstaPoolIo::<T>::mutate(new_sale.region_end, |r| r.system.saturating_reduce(total_pooled));
+		InstaPoolIo::<T>::mutate(new_sale.region_end(), |r| r.system.saturating_reduce(total_pooled));
 
 		let mut leases = Leases::<T>::get();
 		// Can morph to a renewable as long as it's >=begin and <end.
@@ -308,12 +308,12 @@ impl<T: Config> Pallet<T> {
 			let mask = CoreMask::complete();
 			let assignment = CoreAssignment::Task(task);
 			let schedule = BoundedVec::truncate_from(vec![ScheduleItem { mask, assignment }]);
-			Workplan::<T>::insert((new_sale.region_begin, first_core), &schedule);
+			Workplan::<T>::insert((new_sale.region_begin(), first_core), &schedule);
 			// Will the lease expire at the end of the period?
-			let expire = until < new_sale.region_end;
+			let expire = until < new_sale.region_end();
 			if expire {
 				// last time for this one - make it renewable in the next sale.
-				let renewal_id = PotentialRenewalId { core: first_core, when: new_sale.region_end };
+				let renewal_id = PotentialRenewalId { core: first_core, when: new_sale.region_end() };
 				let record = PotentialRenewalRecord {
 					price: new_prices.target_price,
 					completion: Complete(schedule),
@@ -322,10 +322,10 @@ impl<T: Config> Pallet<T> {
 				Self::deposit_event(Event::Renewable {
 					core: first_core,
 					price: new_prices.target_price,
-					begin: new_sale.region_end,
+					begin: new_sale.region_end(),
 					workload: record.completion.drain_complete().unwrap_or_default(),
 				});
-				Self::deposit_event(Event::LeaseEnding { when: new_sale.region_end, task });
+				Self::deposit_event(Event::LeaseEnding { when: new_sale.region_end(), task });
 			}
 
 			first_core.saturating_inc();
@@ -338,10 +338,10 @@ impl<T: Config> Pallet<T> {
 		// to the Renewal phase, where do_renew returns an immediate `Sold` result.
 
 		Self::deposit_event(Event::SaleRotated {
-			region_begin: new_sale.region_begin,
-			region_end: new_sale.region_end,
-			cores_offered: new_sale.cores_offered,
-			first_core: new_sale.first_core,
+			region_begin: new_sale.region_begin(),
+			region_end: new_sale.region_end(),
+			cores_offered: new_sale.cores_offered(),
+			first_core: new_sale.first_core(),
 		});
 	}
 
@@ -354,7 +354,7 @@ impl<T: Config> Pallet<T> {
 			.flat_map(|record| {
 				// Check if the next renewal is scheduled further in the future than the start of
 				// the next region beginning. If so, we skip the renewal for this core.
-				if sale.region_begin < record.next_renewal {
+				if sale.region_begin() < record.next_renewal {
 					return Some(record);
 				}
 
@@ -371,7 +371,7 @@ impl<T: Config> Pallet<T> {
 					Ok(DoRenewResult::Renewed { new_core }) => Some(AutoRenewalRecord {
 						core: new_core,
 						task: record.task,
-						next_renewal: sale.region_end,
+						next_renewal: sale.region_end(),
 					}),
 					Err(_) => {
 						Self::deposit_event(Event::<T>::AutoRenewalFailed {

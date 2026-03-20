@@ -30,7 +30,7 @@ use frame_support::{
 	},
 };
 use frame_system::{Pallet as System, RawOrigin};
-use sp_arithmetic::Perbill;
+
 use sp_core::Get;
 use sp_runtime::{
 	traits::{BlockNumberProvider, MaybeConvert},
@@ -49,16 +49,7 @@ fn assert_has_event<T: Config>(generic_event: <T as Config>::RuntimeEvent) {
 }
 
 fn new_config_record<T: Config>() -> ConfigRecordOf<T> {
-	ConfigRecord {
-		advance_notice: 2u32.into(),
-		market_period: 1u32.into(),
-		renewal_period: 1u32.into(),
-		ideal_bulk_proportion: Default::default(),
-		limit_cores_offered: None,
-		region_length: 3,
-		penalty: Perbill::from_percent(10),
-		contribution_timeout: 5,
-	}
+	T::Market::benchmark_config()
 }
 
 fn new_schedule() -> Schedule {
@@ -99,7 +90,6 @@ fn advance_to<T: Config>(b: u32) {
 
 struct StartedSale<Balance> {
 	start_price: Balance,
-	reserve_price: Balance,
 	first_core: CoreIndex,
 }
 
@@ -121,8 +111,7 @@ fn setup_and_start_sale<T: Config>() -> Result<StartedSale<BalanceOf<T>>, Benchm
 
 	let sale_data = StartedSale {
 		start_price,
-		reserve_price: sale.reserve_price,
-		first_core: sale.first_core,
+		first_core: sale.first_core(),
 	};
 
 	Ok(sale_data)
@@ -136,8 +125,8 @@ fn purchase_and_get_region_id<T: Config>(
 
 	let sale = Broker::<T>::market_sale_info().expect("Sale should exist");
 
-	let begin = sale.region_begin;
-	let core = sale.first_core.saturating_add(sale.cores_sold) - 1;
+	let begin = sale.region_begin();
+	let core = sale.first_core().saturating_add(sale.cores_sold()) - 1;
 	let mask = CoreMask::complete();
 
 	Ok(RegionId { begin, core, mask })
@@ -271,10 +260,10 @@ mod benches {
 		let sale = Broker::<T>::market_sale_info().ok_or(BenchmarkError::Weightless)?;
 		assert_last_event::<T>(
 			Event::SaleRotated {
-				region_begin: sale.region_begin,
-				region_end: sale.region_end,
-				cores_offered: sale.cores_offered,
-				first_core: sale.first_core,
+				region_begin: sale.region_begin(),
+				region_end: sale.region_end(),
+				cores_offered: sale.cores_offered(),
+				first_core: sale.first_core(),
 			}
 			.into(),
 		);
@@ -297,20 +286,16 @@ mod benches {
 		#[extrinsic_call]
 		_(RawOrigin::Signed(caller.clone()), sale_data.start_price);
 
-		assert_eq!(
-			Broker::<T>::market_sale_info().unwrap().clearing_price.unwrap(),
-			sale_data.reserve_price
-		);
 		let sale = Broker::<T>::market_sale_info().unwrap();
 		assert_last_event::<T>(
 			Event::Purchased {
 				who: caller,
 				region_id: RegionId {
-					begin: sale.region_begin,
+					begin: sale.region_begin(),
 					core: sale_data.first_core,
 					mask: CoreMask::complete(),
 				},
-				price: sale_data.reserve_price,
+				price: sale_data.start_price,
 				duration: 3u32.into(),
 			}
 			.into(),
@@ -548,7 +533,9 @@ mod benches {
 
 	#[benchmark]
 	fn claim_revenue(
-		m: Linear<1, { new_config_record::<T>().region_length }>,
+		// Must match `region_length` in the benchmark config returned by
+		// `MarketState::benchmark_config()`.
+		m: Linear<1, 3>,
 	) -> Result<(), BenchmarkError> {
 		let sale_data = setup_and_start_sale::<T>()?;
 		let core = sale_data.first_core;
@@ -592,7 +579,7 @@ mod benches {
 			Event::RevenueClaimPaid {
 				who: recipient,
 				amount: 200_000_000u32.into(),
-				next: if m < new_config_record::<T>().region_length {
+				next: if m < new_config_record::<T>().region_length() {
 					Some(RegionId {
 						begin: region.begin.saturating_add(m),
 						core,
@@ -991,7 +978,7 @@ mod benches {
 			Broker::<T>::do_assign(region, None, task, Final)
 				.map_err(|_| BenchmarkError::Weightless)?;
 
-			Broker::<T>::do_enable_auto_renew(caller, region.core, task, Some(sale.region_end))?;
+			Broker::<T>::do_enable_auto_renew(caller, region.core, task, Some(sale.region_end()))?;
 
 			Ok(())
 		})?;
@@ -1015,7 +1002,7 @@ mod benches {
 		// Therefore, we advance to next bulk sale:
 		let timeslice_period: u32 = T::TimeslicePeriod::get().try_into().ok().unwrap();
 		let config = Broker::<T>::market_configuration().expect("Already configured.");
-		advance_to::<T>(config.region_length * timeslice_period);
+		advance_to::<T>(config.region_length() * timeslice_period);
 
 		#[extrinsic_call]
 		_(RawOrigin::Signed(caller), region.core, 2001, None);
@@ -1025,7 +1012,7 @@ mod benches {
 		let sale = Broker::<T>::market_sale_info().expect("Sales have started.");
 		assert!(PotentialRenewals::<T>::get(PotentialRenewalId {
 			core: region.core,
-			when: sale.region_end,
+			when: sale.region_end(),
 		})
 		.is_some());
 
@@ -1056,7 +1043,7 @@ mod benches {
 			Broker::<T>::do_assign(region, None, task, Final)
 				.map_err(|_| BenchmarkError::Weightless)?;
 
-			Broker::<T>::do_enable_auto_renew(caller, region.core, task, Some(sale.region_end))?;
+			Broker::<T>::do_enable_auto_renew(caller, region.core, task, Some(sale.region_end()))?;
 
 			Ok(())
 		})?;
@@ -1262,13 +1249,13 @@ mod benches {
 			Broker::<T>::do_assign(region, None, task, Final)
 				.map_err(|_| BenchmarkError::Weightless)?;
 
-			Broker::<T>::do_enable_auto_renew(caller, region.core, task, Some(sale.region_end))?;
+			Broker::<T>::do_enable_auto_renew(caller, region.core, task, Some(sale.region_end()))?;
 
 			Ok(())
 		})?;
 
 		// Advance to the block before the rotate_sale in which the auto-renewals will take place.
-		let rotate_block = timeslice_period.saturating_mul(config.region_length) - 2;
+		let rotate_block = timeslice_period.saturating_mul(config.region_length()) - 2;
 		advance_to::<T>(rotate_block - 1);
 
 		// Advance one block and manually tick so we can isolate the `rotate_sale` call.
@@ -1277,7 +1264,7 @@ mod benches {
 		let mut status = Broker::<T>::market_status().expect("Sale has started.");
 		Broker::<T>::process_core_count(&mut status);
 		Broker::<T>::process_revenue();
-		status.last_committed_timeslice = config.region_length;
+		status.last_committed_timeslice = config.region_length();
 		Broker::<T>::set_market_status(status);
 
 		let block = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
@@ -1298,10 +1285,10 @@ mod benches {
 
 		assert_has_event::<T>(
 			Event::SaleRotated {
-				region_begin: new_sale.region_begin,
-				region_end: new_sale.region_end,
-				cores_offered: new_sale.cores_offered,
-				first_core: new_sale.first_core,
+				region_begin: new_sale.region_begin(),
+				region_end: new_sale.region_end(),
+				cores_offered: new_sale.cores_offered(),
+				first_core: new_sale.first_core(),
 			}
 			.into(),
 		);
@@ -1317,8 +1304,8 @@ mod benches {
 					old_core: n_reservations as u16 + n_leases as u16 + indx as u16,
 					core: n_reservations as u16 + n_leases as u16 + indx as u16,
 					price,
-					begin: new_sale.region_begin,
-					duration: config.region_length,
+					begin: new_sale.region_begin(),
+					duration: config.region_length(),
 					workload: Schedule::truncate_from(vec![ScheduleItem {
 						assignment: Task(task),
 						mask: CoreMask::complete(),

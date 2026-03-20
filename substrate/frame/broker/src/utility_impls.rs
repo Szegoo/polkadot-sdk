@@ -52,6 +52,11 @@ impl<T: Config> Pallet<T> {
 		T::Market::set_sale_info(sale_info);
 	}
 
+	pub fn market_current_price() -> Option<BalanceOf<T>> {
+		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
+		T::Market::current_price(now)
+	}
+
 	pub fn current_timeslice() -> Timeslice {
 		let latest = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
 		let timeslice_period = T::TimeslicePeriod::get();
@@ -60,7 +65,7 @@ impl<T: Config> Pallet<T> {
 
 	pub fn latest_timeslice_ready_to_commit(config: &ConfigRecordOf<T>) -> Timeslice {
 		let latest = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
-		let advanced = latest.saturating_add(config.advance_notice);
+		let advanced = latest.saturating_add(config.advance_notice());
 		let timeslice_period = T::TimeslicePeriod::get();
 		(advanced / timeslice_period).saturated_into()
 	}

@@ -77,7 +77,7 @@ impl<T: Config> Pallet<T> {
 		// boundary.
 		let status = Self::market_status().ok_or(Error::<T>::Uninitialized)?;
 		let timeslice = status.last_committed_timeslice.saturating_add(1);
-		if timeslice < sale.region_begin {
+		if timeslice < sale.region_begin() {
 			Workplan::<T>::insert((timeslice, core), &workload);
 		}
 
@@ -162,7 +162,7 @@ impl<T: Config> Pallet<T> {
 		// TODO: Try to avoid reading SaleInfo here.
 		let sale = Self::market_sale_info().ok_or(Error::<T>::NoSales)?;
 
-		let renewal_id = PotentialRenewalId { core, when: sale.region_begin };
+		let renewal_id = PotentialRenewalId { core, when: sale.region_begin() };
 		let record = PotentialRenewals::<T>::get(renewal_id).ok_or(Error::<T>::NotAllowed)?;
 		let workload =
 			record.completion.drain_complete().ok_or(Error::<T>::IncompleteAssignment)?;
@@ -368,7 +368,7 @@ impl<T: Config> Pallet<T> {
 			}
 
 			let duration = region.end.saturating_sub(region_id.begin);
-			if duration == config.region_length && finality == Finality::Final {
+			if duration == config.region_length() && finality == Finality::Final {
 				if let Some(price) = region.paid {
 					let renewal_id = PotentialRenewalId { core: region_id.core, when: region.end };
 					let assigned = match PotentialRenewals::<T>::get(renewal_id) {
@@ -519,7 +519,7 @@ impl<T: Config> Pallet<T> {
 			InstaPoolContribution::<T>::get(&region_id).ok_or(Error::<T>::UnknownContribution)?;
 		let end = region_id.begin.saturating_add(contrib.length);
 		ensure!(
-			status.last_timeslice >= end.saturating_add(config.contribution_timeout),
+			status.last_timeslice >= end.saturating_add(config.contribution_timeout()),
 			Error::<T>::StillValid
 		);
 		InstaPoolContribution::<T>::remove(region_id);
@@ -531,7 +531,7 @@ impl<T: Config> Pallet<T> {
 		let config = Self::market_configuration().ok_or(Error::<T>::Uninitialized)?;
 		let status = Self::market_status().ok_or(Error::<T>::Uninitialized)?;
 		ensure!(
-			status.last_timeslice > when.saturating_add(config.contribution_timeout),
+			status.last_timeslice > when.saturating_add(config.contribution_timeout()),
 			Error::<T>::StillValid
 		);
 		let record = InstaPoolHistory::<T>::take(when).ok_or(Error::<T>::NoHistory)?;
@@ -587,7 +587,7 @@ impl<T: Config> Pallet<T> {
 
 		// Check if the core is expiring in the next bulk period; if so, we will renew it now
 		// if we're in the Renewal phase.
-		if PotentialRenewals::<T>::get(PotentialRenewalId { core, when: sale.region_begin })
+		if PotentialRenewals::<T>::get(PotentialRenewalId { core, when: sale.region_begin() })
 			.is_some()
 		{
 			match Self::do_renew(sovereign_account.clone(), core) {
@@ -613,9 +613,9 @@ impl<T: Config> Pallet<T> {
 		// When the renewal was deferred (bid closed during Market phase), use
 		// region_begin so that renew_cores picks it up during this sale's Renewal phase.
 		let next_renewal = if deferred_renewal {
-			sale.region_begin
+			sale.region_begin()
 		} else {
-			workload_end_hint.unwrap_or(sale.region_end)
+			workload_end_hint.unwrap_or(sale.region_end())
 		};
 
 		// We are sorting auto renewals by `CoreIndex`.

@@ -31,11 +31,10 @@ pub type RelayBalanceOf<T> = <<T as Config>::Coretime as CoretimeInterface>::Bal
 pub type RelayBlockNumberOf<T> = RCBlockNumberOf<<T as Config>::Coretime>;
 pub type RelayAccountIdOf<T> = <<T as Config>::Coretime as CoretimeInterface>::AccountId;
 pub type BidIdOf<T> = <<T as Config>::Market as Market>::BidId;
-pub type SaleInfoRecordOf<T> =
-	crate::SaleInfoRecord<BalanceOf<T>, RelayBlockNumberOf<T>>;
-pub type ConfigRecordOf<T> = crate::ConfigRecord<RelayBlockNumberOf<T>>;
+pub type SaleInfoRecordOf<T> = <<T as Config>::Market as Market>::SaleInfo;
+pub type ConfigRecordOf<T> = <<T as Config>::Market as Market>::Config;
 pub type TickActionOf<T> =
-	TickAction<BalanceOf<T>, RelayBlockNumberOf<T>, <T as SConfig>::AccountId, BidIdOf<T>>;
+	TickAction<BalanceOf<T>, <T as SConfig>::AccountId, BidIdOf<T>, SaleInfoRecordOf<T>>;
 
 /// Whether a core assignment is revokable or not.
 #[derive(

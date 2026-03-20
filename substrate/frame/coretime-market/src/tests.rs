@@ -24,7 +24,7 @@ use sp_arithmetic::Perbill;
 use crate::SalePhase;
 use sp_coretime::{
 	ConfigRecord, CoreMask, Market, MarketError, MarketState, OrderResult, PotentialRenewalId,
-	RenewalOrderResult, TickAction,
+	RenewalOrderResult, SaleInfoRecord, TickAction,
 };
 use sp_runtime::DispatchError;
 
@@ -34,7 +34,7 @@ fn start_sales(reserve_price: u64, extra_cores: u16) {
 	assert_ok!(CoretimeMarketImpl::start_sales(0, reserve_price, extra_cores));
 }
 
-fn tick(block_number: u64) -> Vec<TickAction<u64, u64, u64, u32>> {
+fn tick(block_number: u64) -> Vec<TickAction<u64, u64, u32, SaleInfoRecord<u64, u64>>> {
 	let mut meter = WeightMeter::new();
 	CoretimeMarketImpl::tick(block_number, &mut meter)
 }

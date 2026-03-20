@@ -83,7 +83,7 @@ type RelayBlockNumberOf<T> = <T as pallet::Config>::RelayBlockNumber;
 type ConfigRecordOf<T> = ConfigRecord<RelayBlockNumberOf<T>>;
 type SaleInfoRecordOf<T> = SaleInfoRecord<BalanceOf<T>, RelayBlockNumberOf<T>>;
 type TickActionOf<T> =
-	TickAction<BalanceOf<T>, RelayBlockNumberOf<T>, <T as frame_system::Config>::AccountId, u32>;
+	TickAction<BalanceOf<T>, <T as frame_system::Config>::AccountId, u32, SaleInfoRecordOf<T>>;
 
 /// The phase of a Bulk Coretime Sale.
 #[derive(
@@ -373,12 +373,14 @@ impl<T: Config> Market for Pallet<T> {
 	type Error = MarketError;
 	type BidId = u32;
 	type CoreCount = T::CoreCountProvider;
+	type Config = ConfigRecordOf<T>;
+	type SaleInfo = SaleInfoRecordOf<T>;
 
 	fn start_sales(
 		block_number: RelayBlockNumberOf<T>,
 		reserve_price: BalanceOf<T>,
 		core_count: CoreIndex,
-	) -> Result<SalesStarted<BalanceOf<T>, RelayBlockNumberOf<T>>, Self::Error> {
+	) -> Result<SalesStarted<BalanceOf<T>, Self::SaleInfo>, Self::Error> {
 		let config = Configuration::<T>::get().ok_or(MarketError::Uninitialized)?;
 
 		let commit_timeslice = latest_timeslice_ready_to_commit::<T>(block_number, &config);
@@ -755,6 +757,20 @@ impl<T: Config> MarketState for Pallet<T> {
 		}
 	}
 
+	#[cfg(feature = "runtime-benchmarks")]
+	fn benchmark_config() -> Self::Config {
+		use sp_arithmetic::Perbill;
+		ConfigRecord {
+			advance_notice: 2u32.into(),
+			market_period: 1u32.into(),
+			renewal_period: 1u32.into(),
+			ideal_bulk_proportion: Default::default(),
+			limit_cores_offered: None,
+			region_length: 3,
+			penalty: Perbill::from_percent(10),
+			contribution_timeout: 5,
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------

@@ -41,6 +41,81 @@ pub trait RenewalRightsProvider<AccountId> {
 	fn renewal_rights_count(who: &AccountId, when: Timeslice) -> u32;
 }
 
+/// Shared configuration interface that the broker reads from any market implementation.
+pub trait MarketConfig {
+	type BlockNumber;
+
+	fn advance_notice(&self) -> Self::BlockNumber;
+	fn region_length(&self) -> Timeslice;
+	fn contribution_timeout(&self) -> Timeslice;
+
+	/// Check the config for basic validity constraints.
+	fn validate(&self) -> Result<(), ()>;
+}
+
+/// Shared sale info interface that the broker reads from any market implementation.
+pub trait MarketSaleInfo {
+	type Balance;
+	type BlockNumber;
+
+	fn sale_start(&self) -> Self::BlockNumber;
+	fn region_begin(&self) -> Timeslice;
+	fn region_end(&self) -> Timeslice;
+	fn ideal_cores_sold(&self) -> CoreIndex;
+	fn cores_offered(&self) -> CoreIndex;
+	fn first_core(&self) -> CoreIndex;
+	fn cores_sold(&self) -> CoreIndex;
+}
+
+// Implement market traits for the concrete types.
+
+impl<BlockNumber: Clone> MarketConfig for ConfigRecord<BlockNumber>
+where
+	BlockNumber: sp_arithmetic::traits::Zero,
+{
+	type BlockNumber = BlockNumber;
+
+	fn advance_notice(&self) -> BlockNumber {
+		self.advance_notice.clone()
+	}
+	fn region_length(&self) -> Timeslice {
+		self.region_length
+	}
+	fn contribution_timeout(&self) -> Timeslice {
+		self.contribution_timeout
+	}
+	fn validate(&self) -> Result<(), ()> {
+		ConfigRecord::validate(self)
+	}
+}
+
+impl<Balance: Clone, BlockNumber: Clone> MarketSaleInfo for SaleInfoRecord<Balance, BlockNumber> {
+	type Balance = Balance;
+	type BlockNumber = BlockNumber;
+
+	fn sale_start(&self) -> BlockNumber {
+		self.sale_start.clone()
+	}
+	fn region_begin(&self) -> Timeslice {
+		self.region_begin
+	}
+	fn region_end(&self) -> Timeslice {
+		self.region_end
+	}
+	fn ideal_cores_sold(&self) -> CoreIndex {
+		self.ideal_cores_sold
+	}
+	fn cores_offered(&self) -> CoreIndex {
+		self.cores_offered
+	}
+	fn first_core(&self) -> CoreIndex {
+		self.first_core
+	}
+	fn cores_sold(&self) -> CoreIndex {
+		self.cores_sold
+	}
+}
+
 /// Errors specific to market operations.
 #[derive(Debug)]
 pub enum MarketError {
@@ -116,7 +191,7 @@ pub struct CloseBidResult<AccountId, Balance> {
 }
 
 /// Actions returned by `Market::tick` for the broker to process.
-pub enum TickAction<Balance, BlockNumber, AccountId, BidId> {
+pub enum TickAction<Balance, AccountId, BidId, SaleInfo> {
 	SellRegion {
 		owner: AccountId,
 		/// How much was paid for this region in total.
@@ -137,8 +212,8 @@ pub enum TickAction<Balance, BlockNumber, AccountId, BidId> {
 		owner: AccountId,
 	},
 	SaleRotated {
-		old_sale: SaleInfoRecord<Balance, BlockNumber>,
-		new_sale: SaleInfoRecord<Balance, BlockNumber>,
+		old_sale: SaleInfo,
+		new_sale: SaleInfo,
 		new_prices: AdaptedPrices<Balance>,
 		start_price: Balance,
 	},
@@ -150,9 +225,9 @@ pub enum TickAction<Balance, BlockNumber, AccountId, BidId> {
 
 /// Data returned when sales are first started.
 #[derive(Debug)]
-pub struct SalesStarted<Balance, BlockNumber> {
-	pub old_sale: SaleInfoRecord<Balance, BlockNumber>,
-	pub new_sale: SaleInfoRecord<Balance, BlockNumber>,
+pub struct SalesStarted<Balance, SaleInfo> {
+	pub old_sale: SaleInfo,
+	pub new_sale: SaleInfo,
 	pub new_prices: AdaptedPrices<Balance>,
 	pub start_price: Balance,
 }
@@ -163,7 +238,6 @@ pub struct SalesStarted<Balance, BlockNumber> {
 /// - Every order will either create a bid or will be resolved immediately.
 /// - There are two types of orders: bulk coretime purchase and bulk coretime renewal.
 /// - Coretime regions are fungible.
-/// - The market operates in phases: Market (auction), Renewal, Settlement.
 pub trait Market {
 	type AccountId;
 	type Balance;
@@ -181,11 +255,35 @@ pub trait Market {
 		+ Eq;
 	type CoreCount: CoreCountProvider;
 
+	/// Market-specific configuration type. Must expose shared fields via [`MarketConfig`].
+	type Config: MarketConfig<BlockNumber = Self::BlockNumber>
+		+ Encode
+		+ Decode
+		+ DecodeWithMemTracking
+		+ MaxEncodedLen
+		+ TypeInfo
+		+ Clone
+		+ PartialEq
+		+ Eq
+		+ core::fmt::Debug;
+
+	/// Market-specific sale info type. Must expose shared fields via [`MarketSaleInfo`].
+	type SaleInfo: MarketSaleInfo<Balance = Self::Balance, BlockNumber = Self::BlockNumber>
+		+ Encode
+		+ Decode
+		+ DecodeWithMemTracking
+		+ MaxEncodedLen
+		+ TypeInfo
+		+ Clone
+		+ PartialEq
+		+ Eq
+		+ core::fmt::Debug;
+
 	fn start_sales(
 		block_number: Self::BlockNumber,
 		reserve_price: Self::Balance,
 		core_count: CoreIndex,
-	) -> Result<SalesStarted<Self::Balance, Self::BlockNumber>, Self::Error>;
+	) -> Result<SalesStarted<Self::Balance, Self::SaleInfo>, Self::Error>;
 
 	/// Place an order for one bulk coretime region purchase.
 	///
@@ -233,19 +331,33 @@ pub trait Market {
 	fn tick(
 		now: Self::BlockNumber,
 		weight_meter: &mut WeightMeter,
-	) -> Vec<TickAction<Self::Balance, Self::BlockNumber, Self::AccountId, Self::BidId>>;
+	) -> Vec<
+		TickAction<
+			Self::Balance,
+			Self::AccountId,
+			Self::BidId,
+			Self::SaleInfo,
+		>,
+	>;
 }
 
 /// Trait for accessing persistent market state needed by broker logic.
 pub trait MarketState: Market {
-	fn configuration() -> Option<ConfigRecord<Self::BlockNumber>>;
-	fn set_configuration(config: ConfigRecord<Self::BlockNumber>);
+	fn configuration() -> Option<Self::Config>;
+	fn set_configuration(config: Self::Config);
 
 	fn status() -> Option<StatusRecord>;
 	fn set_status(status: StatusRecord);
 
-	fn sale_info() -> Option<SaleInfoRecord<Self::Balance, Self::BlockNumber>>;
-	fn set_sale_info(sale_info: SaleInfoRecord<Self::Balance, Self::BlockNumber>);
+	fn sale_info() -> Option<Self::SaleInfo>;
+	fn set_sale_info(sale_info: Self::SaleInfo);
 
 	fn current_price(block_number: Self::BlockNumber) -> Option<Self::Balance>;
+
+	/// Returns a config suitable for benchmarking.
+	///
+	/// The returned config must have `region_length == 3` and `contribution_timeout == 5`
+	/// for broker benchmark compatibility.
+	#[cfg(feature = "runtime-benchmarks")]
+	fn benchmark_config() -> Self::Config;
 }

@@ -112,7 +112,7 @@ pub struct PotentialRenewalId {
 }
 
 /// The status of a Bulk Coretime Sale.
-#[derive(Encode, Decode, Clone, PartialEq, Eq, Debug, TypeInfo, MaxEncodedLen)]
+#[derive(Encode, Decode, DecodeWithMemTracking, Clone, PartialEq, Eq, Debug, TypeInfo, MaxEncodedLen)]
 pub struct SaleInfoRecord<Balance, BlockNumber> {
 	/// The relay block number at which the sale (Market phase) starts.
 	pub sale_start: BlockNumber,

@@ -28,23 +28,28 @@ use sp_runtime::{traits::Zero, FixedPointOperand, FixedU64, SaturatedConversion,
 
 use crate::{
 	AdaptPrice, AdaptedPrices, BalanceOf, CenterTargetPrice, CloseBidResult, Config,
-	ConfigRecordOf, CoreCountProvider, CoreIndex, CoreMask, Leases, Market, MarketError,
+	CoreCountProvider, CoreIndex, CoreMask, Leases, Market, MarketError,
 	MarketState, OrderResult, Pallet, PotentialRenewalId, RegionId, RelayBlockNumberOf,
-	RenewalOrderResult, Reservations, SaleInfoRecord, SaleInfoRecordOf, SalePerformance,
+	RenewalOrderResult, Reservations, SaleInfoRecord, SalePerformance,
 	SalesStarted, StatusRecord, TickAction, Timeslice,
 };
 use alloc::vec::Vec;
+
+/// Concrete config type for the legacy market.
+type LegacyConfigRecordOf<T> = crate::ConfigRecord<RelayBlockNumberOf<T>>;
+/// Concrete sale info type for the legacy market.
+type LegacySaleInfoRecordOf<T> = SaleInfoRecord<BalanceOf<T>, RelayBlockNumberOf<T>>;
 
 // Storage items for the legacy market. These use `#[storage_alias]` so they don't appear
 // in the broker pallet's metadata — they're only used when `type Market = Pallet<Runtime>`.
 
 #[storage_alias]
 type Configuration<T: Config> =
-	StorageValue<Pallet<T>, ConfigRecordOf<T>, frame_support::pallet_prelude::OptionQuery>;
+	StorageValue<Pallet<T>, crate::ConfigRecord<RelayBlockNumberOf<T>>, frame_support::pallet_prelude::OptionQuery>;
 
 #[storage_alias]
 type SaleInfo<T: Config> =
-	StorageValue<Pallet<T>, SaleInfoRecordOf<T>, frame_support::pallet_prelude::OptionQuery>;
+	StorageValue<Pallet<T>, crate::SaleInfoRecord<BalanceOf<T>, RelayBlockNumberOf<T>>, frame_support::pallet_prelude::OptionQuery>;
 
 #[storage_alias]
 type Status<T: Config> =
@@ -53,9 +58,9 @@ type Status<T: Config> =
 /// Type alias for TickAction with concrete pallet types.
 pub(crate) type TickActionOf<T> = TickAction<
 	BalanceOf<T>,
-	RelayBlockNumberOf<T>,
 	<T as frame_system::Config>::AccountId,
 	(),
+	SaleInfoRecord<BalanceOf<T>, RelayBlockNumberOf<T>>,
 >;
 
 /// Provides the reserved core count from the broker's own storage.
@@ -79,12 +84,14 @@ where
 	/// Must be unique.
 	type BidId = ();
 	type CoreCount = BrokerCoreCountProvider<T>;
+	type Config = crate::ConfigRecord<RelayBlockNumberOf<T>>;
+	type SaleInfo = crate::SaleInfoRecord<BalanceOf<T>, RelayBlockNumberOf<T>>;
 
 	fn start_sales(
 		block_number: RelayBlockNumberOf<T>,
 		reserve_price: BalanceOf<T>,
 		core_count: CoreIndex,
-	) -> Result<SalesStarted<BalanceOf<T>, RelayBlockNumberOf<T>>, Self::Error> {
+	) -> Result<SalesStarted<BalanceOf<T>, Self::SaleInfo>, Self::Error> {
 		let config = Configuration::<T>::get().ok_or(MarketError::Uninitialized)?;
 
 		let commit_timeslice = latest_timeslice_ready_to_commit::<T>(block_number, &config);
@@ -235,11 +242,11 @@ impl<T: Config> MarketState for Pallet<T>
 where
 	BalanceOf<T>: FixedPointOperand,
 {
-	fn configuration() -> Option<ConfigRecordOf<T>> {
+	fn configuration() -> Option<LegacyConfigRecordOf<T>> {
 		Configuration::<T>::get()
 	}
 
-	fn set_configuration(config: ConfigRecordOf<T>) {
+	fn set_configuration(config: LegacyConfigRecordOf<T>) {
 		Configuration::<T>::put(config);
 	}
 
@@ -251,11 +258,11 @@ where
 		Status::<T>::put(status);
 	}
 
-	fn sale_info() -> Option<SaleInfoRecordOf<T>> {
+	fn sale_info() -> Option<LegacySaleInfoRecordOf<T>> {
 		SaleInfo::<T>::get()
 	}
 
-	fn set_sale_info(sale_info: SaleInfoRecordOf<T>) {
+	fn set_sale_info(sale_info: LegacySaleInfoRecordOf<T>) {
 		SaleInfo::<T>::put(sale_info);
 	}
 
@@ -264,11 +271,25 @@ where
 		let sale = SaleInfo::<T>::get()?;
 		Some(sell_price::<T>(block_number, &sale, &config))
 	}
+
+	#[cfg(feature = "runtime-benchmarks")]
+	fn benchmark_config() -> Self::Config {
+		crate::ConfigRecord {
+			advance_notice: 2u32.into(),
+			market_period: 1u32.into(),
+			renewal_period: 1u32.into(),
+			ideal_bulk_proportion: Default::default(),
+			limit_cores_offered: None,
+			region_length: 3,
+			penalty: sp_arithmetic::Perbill::from_percent(10),
+			contribution_timeout: 5,
+		}
+	}
 }
 
 pub(crate) fn sale_rotated<T: Config>(
-	sale: SaleInfoRecordOf<T>,
-	config: &ConfigRecordOf<T>,
+	sale: LegacySaleInfoRecordOf<T>,
+	config: &LegacyConfigRecordOf<T>,
 	status: &StatusRecord,
 	block_number: RelayBlockNumberOf<T>,
 	actions: &mut Vec<TickActionOf<T>>,
@@ -284,7 +305,7 @@ pub(crate) fn sale_rotated<T: Config>(
 	actions.push(TickAction::SaleRotated { old_sale: sale, new_sale, new_prices, start_price });
 }
 
-fn purchase_core<T: Config>(price: BalanceOf<T>, sale: &mut SaleInfoRecordOf<T>) -> CoreIndex {
+fn purchase_core<T: Config>(price: BalanceOf<T>, sale: &mut LegacySaleInfoRecordOf<T>) -> CoreIndex {
 	let core = sale.first_core.saturating_add(sale.cores_sold);
 	sale.cores_sold.saturating_inc();
 	if sale.cores_sold <= sale.ideal_cores_sold || sale.clearing_price.is_none() {
@@ -295,8 +316,8 @@ fn purchase_core<T: Config>(price: BalanceOf<T>, sale: &mut SaleInfoRecordOf<T>)
 
 pub(crate) fn sell_price<T: Config>(
 	now: RelayBlockNumberOf<T>,
-	sale: &SaleInfoRecordOf<T>,
-	config: &ConfigRecordOf<T>,
+	sale: &LegacySaleInfoRecordOf<T>,
+	config: &LegacyConfigRecordOf<T>,
 ) -> BalanceOf<T>
 where
 	BalanceOf<T>: FixedPointOperand,
@@ -321,7 +342,7 @@ fn current_timeslice<T: Config>(now: RelayBlockNumberOf<T>) -> Timeslice {
 
 fn next_timeslice_to_commit<T: Config>(
 	now: RelayBlockNumberOf<T>,
-	config: &ConfigRecordOf<T>,
+	config: &LegacyConfigRecordOf<T>,
 	status: &StatusRecord,
 ) -> Option<Timeslice> {
 	if status.last_committed_timeslice < latest_timeslice_ready_to_commit::<T>(now, config) {
@@ -333,14 +354,14 @@ fn next_timeslice_to_commit<T: Config>(
 
 fn latest_timeslice_ready_to_commit<T: Config>(
 	now: RelayBlockNumberOf<T>,
-	config: &ConfigRecordOf<T>,
+	config: &LegacyConfigRecordOf<T>,
 ) -> Timeslice {
 	let advanced = now.saturating_add(config.advance_notice);
 	let timeslice_period = T::TimeslicePeriod::get();
 	(advanced / timeslice_period).saturated_into()
 }
 
-fn adapt_prices<T: Config>(old_sale: &SaleInfoRecordOf<T>) -> AdaptedPrices<BalanceOf<T>>
+fn adapt_prices<T: Config>(old_sale: &LegacySaleInfoRecordOf<T>) -> AdaptedPrices<BalanceOf<T>>
 where
 	BalanceOf<T>: FixedPointOperand,
 {
@@ -348,12 +369,12 @@ where
 }
 
 pub(crate) fn rotate_sale<T: Config>(
-	old_sale: &SaleInfoRecordOf<T>,
-	config: &ConfigRecordOf<T>,
+	old_sale: &LegacySaleInfoRecordOf<T>,
+	config: &LegacyConfigRecordOf<T>,
 	status: &StatusRecord,
 	reserved_cores: CoreIndex,
 	now: RelayBlockNumberOf<T>,
-) -> (AdaptedPrices<BalanceOf<T>>, SaleInfoRecordOf<T>)
+) -> (AdaptedPrices<BalanceOf<T>>, LegacySaleInfoRecordOf<T>)
 where
 	BalanceOf<T>: FixedPointOperand,
 {

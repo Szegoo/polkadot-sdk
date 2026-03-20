@@ -24,6 +24,7 @@ sp-weights = { workspace = true }
 
 [features]
 default = ["std"]
+runtime-benchmarks = []
 std = [
 	"codec/std",
 	"scale-info/std",
