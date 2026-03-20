@@ -17,22 +17,11 @@
 
 //! Legacy market implementation for the broker pallet.
 //!
-//! This module implements the [`Market`] and [`MarketState`] traits directly on the broker
-//! pallet, providing the original (pre-RFC-17) coretime sales model:
-//!
-//! - Immediate purchases at a descending price (no bids or auction settlement)
-//! - Renewals at a fixed price derived from the previous sale
-//! - A two-phase leadin price curve
-//!
-//! To use this implementation, configure the runtime with:
-//! ```ignore
-//! type Market = pallet_broker::Pallet<Runtime>;
-//! ```
-//!
-//! For the RFC-17 clearing-price auction model, use `pallet_coretime_market` instead.
+//! This implements the [`Market`] and [`MarketState`] traits directly on the broker pallet,
+//! providing the original (pre-RFC-17) coretime sales model. To use it, configure the runtime
+//! with `type Market = pallet_broker::Pallet<Runtime>`.
 
 use core::cmp;
-
 use frame_support::{ensure, storage_alias, traits::Get, weights::WeightMeter};
 use sp_arithmetic::FixedPointNumber;
 use sp_runtime::{traits::Zero, FixedPointOperand, FixedU64, SaturatedConversion, Saturating};
@@ -62,7 +51,7 @@ type Status<T: Config> =
 	StorageValue<Pallet<T>, StatusRecord, frame_support::pallet_prelude::OptionQuery>;
 
 /// Type alias for TickAction with concrete pallet types.
-pub type TickActionOf<T> = TickAction<
+pub(crate) type TickActionOf<T> = TickAction<
 	BalanceOf<T>,
 	RelayBlockNumberOf<T>,
 	<T as frame_system::Config>::AccountId,
@@ -87,6 +76,7 @@ where
 	type Balance = BalanceOf<T>;
 	type BlockNumber = RelayBlockNumberOf<T>;
 	type Error = MarketError;
+	/// Must be unique.
 	type BidId = ();
 	type CoreCount = BrokerCoreCountProvider<T>;
 
@@ -142,6 +132,7 @@ where
 
 		ensure!(sale.first_core < status.core_count, MarketError::Unavailable);
 		ensure!(sale.cores_sold < sale.cores_offered, MarketError::SoldOut);
+
 		ensure!(block_number > sale.sale_start, MarketError::TooEarly);
 
 		let current_price = sell_price::<T>(block_number, &sale, &config);
@@ -221,23 +212,10 @@ where
 
 			if let Some(sale) = SaleInfo::<T>::get() {
 				if commit_timeslice >= sale.region_begin {
-					// Emit ProcessRenewals before SaleRotated so the broker processes
-					// auto-renewals against the current sale before rotating.
+					// Process renewals against the current sale before rotating.
 					actions.push(TickAction::ProcessRenewals);
 
-					let reserved_cores =
-						<Self as Market>::CoreCount::reserved_core_count();
-					let (new_prices, new_sale) =
-						rotate_sale::<T>(&sale, &config, &status, reserved_cores, block_number);
-					SaleInfo::<T>::put(&new_sale);
-
-					let start_price = sell_price::<T>(block_number, &new_sale, &config);
-					actions.push(TickAction::SaleRotated {
-						old_sale: sale,
-						new_sale,
-						new_prices,
-						start_price,
-					});
+					sale_rotated::<T>(sale, &config, &status, block_number, &mut actions);
 				}
 			}
 		}
@@ -288,7 +266,23 @@ where
 	}
 }
 
-// -- Helper functions --
+pub(crate) fn sale_rotated<T: Config>(
+	sale: SaleInfoRecordOf<T>,
+	config: &ConfigRecordOf<T>,
+	status: &StatusRecord,
+	block_number: RelayBlockNumberOf<T>,
+	actions: &mut Vec<TickActionOf<T>>,
+) where
+	BalanceOf<T>: FixedPointOperand,
+{
+	let reserved_cores = <Pallet<T> as Market>::CoreCount::reserved_core_count();
+	let (new_prices, new_sale) =
+		rotate_sale::<T>(&sale, config, status, reserved_cores, block_number);
+	SaleInfo::<T>::put(&new_sale);
+
+	let start_price = sell_price::<T>(block_number, &new_sale, config);
+	actions.push(TickAction::SaleRotated { old_sale: sale, new_sale, new_prices, start_price });
+}
 
 fn purchase_core<T: Config>(price: BalanceOf<T>, sale: &mut SaleInfoRecordOf<T>) -> CoreIndex {
 	let core = sale.first_core.saturating_add(sale.cores_sold);
@@ -299,10 +293,7 @@ fn purchase_core<T: Config>(price: BalanceOf<T>, sale: &mut SaleInfoRecordOf<T>)
 	core
 }
 
-/// Calculate the current sell price using the two-phase leadin curve.
-///
-/// The price descends from `opening_price` to `reserve_price` over `market_period` blocks.
-fn sell_price<T: Config>(
+pub(crate) fn sell_price<T: Config>(
 	now: RelayBlockNumberOf<T>,
 	sale: &SaleInfoRecordOf<T>,
 	config: &ConfigRecordOf<T>,
@@ -310,17 +301,12 @@ fn sell_price<T: Config>(
 where
 	BalanceOf<T>: FixedPointOperand,
 {
-	let elapsed = now.saturating_sub(sale.sale_start).min(config.market_period);
-	let through =
-		FixedU64::from_rational(elapsed.saturated_into(), config.market_period.saturated_into());
+	let num = now.saturating_sub(sale.sale_start).min(config.market_period).saturated_into();
+	let through = FixedU64::from_rational(num, config.market_period.saturated_into());
 	leadin_factor_at(through).saturating_mul_int(sale.reserve_price)
 }
 
-/// Two-phase leadin curve.
-///
-/// - First half: steep descent from 100x to 10x the reserve price.
-/// - Second half: gradual descent from 10x to 1x the reserve price.
-fn leadin_factor_at(when: FixedU64) -> FixedU64 {
+pub(crate) fn leadin_factor_at(when: FixedU64) -> FixedU64 {
 	if when <= FixedU64::from_rational(1, 2) {
 		FixedU64::from(100).saturating_sub(when.saturating_mul(180.into()))
 	} else {
@@ -354,7 +340,14 @@ fn latest_timeslice_ready_to_commit<T: Config>(
 	(advanced / timeslice_period).saturated_into()
 }
 
-fn rotate_sale<T: Config>(
+fn adapt_prices<T: Config>(old_sale: &SaleInfoRecordOf<T>) -> AdaptedPrices<BalanceOf<T>>
+where
+	BalanceOf<T>: FixedPointOperand,
+{
+	CenterTargetPrice::<BalanceOf<T>>::adapt_price(SalePerformance::from_sale(old_sale))
+}
+
+pub(crate) fn rotate_sale<T: Config>(
 	old_sale: &SaleInfoRecordOf<T>,
 	config: &ConfigRecordOf<T>,
 	status: &StatusRecord,
@@ -364,9 +357,7 @@ fn rotate_sale<T: Config>(
 where
 	BalanceOf<T>: FixedPointOperand,
 {
-	let new_prices = CenterTargetPrice::<BalanceOf<T>>::adapt_price(
-		SalePerformance::from_sale(old_sale),
-	);
+	let new_prices = adapt_prices::<T>(old_sale);
 
 	let max_possible_sales = status.core_count.saturating_sub(reserved_cores);
 	let limit_cores_offered = config.limit_cores_offered.unwrap_or(CoreIndex::max_value());
@@ -374,9 +365,10 @@ where
 	let sale_start = now;
 	let ideal_cores_sold = (config.ideal_bulk_proportion * cores_offered as u32) as u16;
 
-	let opening_price = leadin_factor_at(FixedU64::zero())
-		.saturating_mul_int(new_prices.reserve_price);
+	let opening_price =
+		leadin_factor_at(FixedU64::zero()).saturating_mul_int(new_prices.reserve_price);
 	let clearing_price = if cores_offered > 0 {
+		// No core sold -> price was too high -> we have to adjust downwards.
 		Some(new_prices.reserve_price)
 	} else {
 		None
