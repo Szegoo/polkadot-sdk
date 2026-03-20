@@ -21,9 +21,10 @@ use crate::mock::*;
 use frame_support::assert_ok;
 use frame_support::weights::WeightMeter;
 use sp_arithmetic::Perbill;
+use crate::SalePhase;
 use sp_coretime::{
 	ConfigRecord, CoreMask, Market, MarketError, MarketState, OrderResult, PotentialRenewalId,
-	RenewalOrderResult, SalePhase, TickAction,
+	RenewalOrderResult, TickAction,
 };
 use sp_runtime::DispatchError;
 
@@ -182,7 +183,7 @@ fn place_bid_fails_before_sale_start() {
 }
 
 #[test]
-fn place_bid_fails_above_current_price() {
+fn place_bid_clamps_to_current_price() {
 	TestExt::new().execute_with(|| {
 		start_sales(100, 2);
 
@@ -191,10 +192,14 @@ fn place_bid_fails_above_current_price() {
 		let current_price =
 			<CoretimeMarketImpl as MarketState>::current_price(block).unwrap();
 
-		assert!(matches!(
-			place_bid(block, 1, current_price + 1),
-			Err(MarketError::BidTooHigh)
-		));
+		// Bidding above current price should clamp to current price, not fail.
+		let result = place_bid(block, 1, current_price + 1).unwrap();
+		match result {
+			OrderResult::BidPlaced { bid_price, .. } => {
+				assert_eq!(bid_price, current_price);
+			},
+			_ => panic!("Expected BidPlaced"),
+		}
 	});
 }
 

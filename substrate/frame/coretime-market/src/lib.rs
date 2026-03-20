@@ -65,11 +65,13 @@ use frame_support::{
 	weights::{Weight, WeightMeter},
 };
 use sp_arithmetic::FixedPointNumber;
+use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
+use scale_info::TypeInfo;
 use sp_coretime::{
 	AdaptPrice, AdaptedPrices, CloseBidResult, ConfigRecord, CoreCountProvider, CoreIndex,
 	CoreMask, DisplacedBid, Market, MarketError, MarketState, OrderResult, PotentialRenewalId,
 	RegionId, RenewalOrderResult, RenewalRightsProvider, SaleInfoRecord, SalePerformance,
-	SalePhase, SalesStarted, StatusRecord, TickAction, Timeslice,
+	SalesStarted, StatusRecord, TickAction, Timeslice,
 };
 use sp_runtime::{
 	traits::{AtLeast32BitUnsigned, SaturatedConversion, Saturating, Zero},
@@ -82,6 +84,28 @@ type ConfigRecordOf<T> = ConfigRecord<RelayBlockNumberOf<T>>;
 type SaleInfoRecordOf<T> = SaleInfoRecord<BalanceOf<T>, RelayBlockNumberOf<T>>;
 type TickActionOf<T> =
 	TickAction<BalanceOf<T>, RelayBlockNumberOf<T>, <T as frame_system::Config>::AccountId, u32>;
+
+/// The phase of a Bulk Coretime Sale.
+#[derive(
+	Encode,
+	Decode,
+	DecodeWithMemTracking,
+	Copy,
+	Clone,
+	PartialEq,
+	Eq,
+	Debug,
+	TypeInfo,
+	MaxEncodedLen,
+)]
+pub enum SalePhase {
+	/// Market period: descending Dutch auction, bids accepted.
+	Market,
+	/// Renewal period: existing tenants can exercise renewal rights.
+	Renewal,
+	/// Settlement period: secondary market trading only, no primary sales.
+	Settlement,
+}
 
 /// A bid in the descending clock auction.
 #[derive(
@@ -274,14 +298,24 @@ pub mod pallet {
 			/// The new phase.
 			to: SalePhase,
 		},
-		/// A new sale has been started.
-		SaleRotated {
-			/// The new sale's region begin timeslice.
-			region_begin: Timeslice,
-			/// The reserve price for the new sale.
+		/// A new sale has been initialized.
+		SaleInitialized {
+			/// The relay block number at which the sale starts.
+			sale_start: RelayBlockNumberOf<T>,
+			/// The length in relay chain blocks of the Market Period.
+			market_period: RelayBlockNumberOf<T>,
+			/// The price of Bulk Coretime at the beginning of the Market period.
+			start_price: BalanceOf<T>,
+			/// The reserve (floor) price of the descending auction.
 			reserve_price: BalanceOf<T>,
-			/// The opening price for the new sale's descending auction.
-			opening_price: BalanceOf<T>,
+			/// The first timeslice of the Regions being sold.
+			region_begin: Timeslice,
+			/// The timeslice on which the Regions being sold terminate.
+			region_end: Timeslice,
+			/// The number of cores we want to sell, ideally.
+			ideal_cores_sold: CoreIndex,
+			/// Number of cores which are/have been offered for sale.
+			cores_offered: CoreIndex,
 		},
 	}
 
@@ -378,13 +412,18 @@ impl<T: Config> Market for Pallet<T> {
 		Status::<T>::put(&status);
 		CurrentPhase::<T>::put(SalePhase::Market);
 
-		Self::deposit_event(Event::SaleRotated {
-			region_begin: new_sale.region_begin,
+		let start_price = new_sale.opening_price;
+		Self::deposit_event(Event::SaleInitialized {
+			sale_start: new_sale.sale_start,
+			market_period: config.market_period,
+			start_price,
 			reserve_price: new_sale.reserve_price,
-			opening_price: new_sale.opening_price,
+			region_begin: new_sale.region_begin,
+			region_end: new_sale.region_end,
+			ideal_cores_sold: new_sale.ideal_cores_sold,
+			cores_offered: new_sale.cores_offered,
 		});
 
-		let start_price = new_sale.opening_price;
 		Ok(SalesStarted { old_sale, new_sale, new_prices, start_price })
 	}
 
@@ -401,20 +440,20 @@ impl<T: Config> Market for Pallet<T> {
 		ensure!(bid_count < T::MaxBids::get(), MarketError::SoldOut);
 
 		let current_price = descending_price::<T>(block_number, &sale);
-		ensure!(price_limit <= current_price, MarketError::BidTooHigh);
+		let bid_price = price_limit.min(current_price);
 
 		let bid_id = bid_count;
 		NextBidId::<T>::put(bid_id.saturating_add(1));
 
-		Bids::<T>::insert(bid_id, BidRecord { who: who.clone(), price: price_limit });
+		Bids::<T>::insert(bid_id, BidRecord { who: who.clone(), price: bid_price });
 
 		Self::deposit_event(Event::BidPlaced {
 			who: who.clone(),
 			bid_id,
-			amount: price_limit,
+			amount: bid_price,
 		});
 
-		Ok(OrderResult::BidPlaced { id: bid_id, bid_price: price_limit })
+		Ok(OrderResult::BidPlaced { id: bid_id, bid_price })
 	}
 
 	fn place_renewal_order(
@@ -597,7 +636,7 @@ impl<T: Config> Market for Pallet<T> {
 					}
 					weight_meter.consume(T::WeightInfo::settle_auction());
 
-					let actions = settle_auction::<T>(&sale);
+					let mut actions = settle_auction::<T>(&sale);
 					CurrentPhase::<T>::put(SalePhase::Renewal);
 
 					Self::deposit_event(Event::PhaseTransitioned {
@@ -605,6 +644,7 @@ impl<T: Config> Market for Pallet<T> {
 						to: SalePhase::Renewal,
 					});
 
+					actions.push(TickAction::ProcessRenewals);
 					return actions;
 				}
 			},
@@ -657,13 +697,17 @@ impl<T: Config> Market for Pallet<T> {
 						from: SalePhase::Settlement,
 						to: SalePhase::Market,
 					});
-					Self::deposit_event(Event::SaleRotated {
-						region_begin: new_sale.region_begin,
-						reserve_price: new_sale.reserve_price,
-						opening_price: new_sale.opening_price,
-					});
-
 					let start_price = new_sale.opening_price;
+					Self::deposit_event(Event::SaleInitialized {
+						sale_start: new_sale.sale_start,
+						market_period: config.market_period,
+						start_price,
+						reserve_price: new_sale.reserve_price,
+						region_begin: new_sale.region_begin,
+						region_end: new_sale.region_end,
+						ideal_cores_sold: new_sale.ideal_cores_sold,
+						cores_offered: new_sale.cores_offered,
+					});
 					return vec![TickAction::SaleRotated {
 						old_sale: sale,
 						new_sale,
@@ -711,9 +755,6 @@ impl<T: Config> MarketState for Pallet<T> {
 		}
 	}
 
-	fn current_phase() -> Option<SalePhase> {
-		CurrentPhase::<T>::get()
-	}
 }
 
 // ---------------------------------------------------------------------------

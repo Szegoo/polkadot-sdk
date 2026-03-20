@@ -15,7 +15,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::SalePhase;
 use alloc::vec::Vec;
 use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
 use scale_info::TypeInfo;
@@ -143,6 +142,9 @@ pub enum TickAction<Balance, BlockNumber, AccountId, BidId> {
 		new_prices: AdaptedPrices<Balance>,
 		start_price: Balance,
 	},
+	/// The market has transitioned into a phase where auto-renewals should be
+	/// processed. The broker should call its renewal logic when it receives this.
+	ProcessRenewals,
 }
 
 /// Data returned when sales are first started.
@@ -186,10 +188,8 @@ pub trait Market {
 
 	/// Place an order for one bulk coretime region purchase.
 	///
-	/// During Market phase: creates a bid at the given price. Bids must be <= current
-	/// descending price. Returns `BidPlaced`.
-	///
-	/// - `price_limit` - the bid price (must be <= current descending price)
+	/// `price_limit` is the maximum the buyer is willing to pay. The implementation
+	/// clamps the actual bid to `min(price_limit, current_price)`.
 	fn place_order(
 		block_number: Self::BlockNumber,
 		who: &Self::AccountId,
@@ -247,6 +247,4 @@ pub trait MarketState: Market {
 	fn set_sale_info(sale_info: SaleInfoRecord<Self::Balance, Self::BlockNumber>);
 
 	fn current_price(block_number: Self::BlockNumber) -> Option<Self::Balance>;
-
-	fn current_phase() -> Option<SalePhase>;
 }

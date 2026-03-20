@@ -269,18 +269,12 @@ mod benches {
 		_(origin as T::RuntimeOrigin, initial_price, extra_cores.try_into().unwrap());
 
 		let sale = Broker::<T>::market_sale_info().ok_or(BenchmarkError::Weightless)?;
-		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
-		let start_price = T::Market::current_price(now).ok_or(BenchmarkError::Weightless)?;
 		assert_last_event::<T>(
-			Event::SaleInitialized {
-				sale_start: sale.sale_start,
-				market_period: Broker::<T>::market_configuration().unwrap().market_period,
-				start_price,
-				reserve_price: sale.reserve_price,
+			Event::SaleRotated {
 				region_begin: sale.region_begin,
 				region_end: sale.region_end,
-				ideal_cores_sold: sale.ideal_cores_sold,
 				cores_offered: sale.cores_offered,
+				first_core: sale.first_core,
 			}
 			.into(),
 		);
@@ -1301,18 +1295,13 @@ mod benches {
 		}
 
 		let new_sale = Broker::<T>::market_sale_info().expect("Sale has started.");
-		let start_price = T::Market::current_price(block).ok_or(BenchmarkError::Weightless)?;
 
 		assert_has_event::<T>(
-			Event::SaleInitialized {
-				sale_start: new_sale.sale_start,
-				market_period: Broker::<T>::market_configuration().unwrap().market_period,
-				start_price,
-				reserve_price: new_sale.reserve_price,
+			Event::SaleRotated {
 				region_begin: new_sale.region_begin,
 				region_end: new_sale.region_end,
-				ideal_cores_sold: new_sale.ideal_cores_sold,
 				cores_offered: new_sale.cores_offered,
+				first_core: new_sale.first_core,
 			}
 			.into(),
 		);

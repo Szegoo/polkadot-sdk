@@ -188,21 +188,10 @@ impl<T: Config> Pallet<T> {
 
 	pub(crate) fn process_market_logic(meter: &mut WeightMeter) {
 		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
-		let phase_before = T::Market::current_phase();
 		let result = T::Market::tick(now, meter);
 
 		for action in result {
 			Self::process_tick_action(action, meter);
-		}
-
-		// Process auto-renewals when transitioning into the Renewal phase.
-		// During Renewal phase, `do_renew` returns `Sold` immediately, which is
-		// required for proper workplan and PotentialRenewal updates.
-		let phase_after = T::Market::current_phase();
-		if phase_before != Some(SalePhase::Renewal) && phase_after == Some(SalePhase::Renewal) {
-			if let Some(sale) = Self::market_sale_info() {
-				Self::renew_cores(&sale);
-			}
 		}
 	}
 
@@ -237,16 +226,21 @@ impl<T: Config> Pallet<T> {
 
 				Self::deposit_event(Event::BidClosed { bid_id: id, owner });
 			},
-			TickAction::SaleRotated { old_sale, new_sale, new_prices, start_price } => {
+			TickAction::SaleRotated { old_sale, new_sale, new_prices, .. } => {
 				if let Some(status) = Self::market_status() {
 					meter.consume(T::WeightInfo::process_tick_action_sale_rotated(
 						status.core_count.into(),
 					));
 
-					Self::rotate_sale(&old_sale, &new_sale, new_prices, start_price, &status);
+					Self::rotate_sale(&old_sale, &new_sale, new_prices, &status);
 				} else {
 					// Consume for the storage read.
 					meter.consume(T::WeightInfo::process_tick_action_sale_rotated(0));
+				}
+			},
+			TickAction::ProcessRenewals => {
+				if let Some(sale) = Self::market_sale_info() {
+					Self::renew_cores(&sale);
 				}
 			},
 		}
@@ -257,7 +251,6 @@ impl<T: Config> Pallet<T> {
 		old_sale: &SaleInfoRecordOf<T>,
 		new_sale: &SaleInfoRecordOf<T>,
 		new_prices: AdaptedPrices<BalanceOf<T>>,
-		start_price: BalanceOf<T>,
 		status: &StatusRecord,
 	) {
 		let pool_item =
@@ -344,17 +337,11 @@ impl<T: Config> Pallet<T> {
 		// Note: renew_cores is now called in process_market_logic when transitioning
 		// to the Renewal phase, where do_renew returns an immediate `Sold` result.
 
-		let config = Self::market_configuration()
-			.expect("market configuration must be set before sale rotation; qed");
-		Self::deposit_event(Event::SaleInitialized {
-			sale_start: new_sale.sale_start,
-			market_period: config.market_period,
-			start_price,
-			reserve_price: new_prices.reserve_price,
+		Self::deposit_event(Event::SaleRotated {
 			region_begin: new_sale.region_begin,
 			region_end: new_sale.region_end,
-			ideal_cores_sold: new_sale.ideal_cores_sold,
 			cores_offered: new_sale.cores_offered,
+			first_core: new_sale.first_core,
 		});
 	}
 

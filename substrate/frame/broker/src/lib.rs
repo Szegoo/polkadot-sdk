@@ -325,25 +325,16 @@ pub mod pallet {
 			/// The workload of the now cancelled reservation.
 			workload: Schedule,
 		},
-		/// A new sale has been initialized.
-		SaleInitialized {
-			/// The relay block number at which the sale will/did start.
-			sale_start: RelayBlockNumberOf<T>,
-			/// The length in relay chain blocks of the Market Period.
-			market_period: RelayBlockNumberOf<T>,
-			/// The price of Bulk Coretime at the beginning of the Market period.
-			start_price: BalanceOf<T>,
-			/// The reserve (floor) price of the descending auction.
-			reserve_price: BalanceOf<T>,
+		/// The sale has been rotated to a new region.
+		SaleRotated {
 			/// The first timeslice of the Regions which are being sold in this sale.
 			region_begin: Timeslice,
-			/// The timeslice on which the Regions which are being sold in the sale terminate.
-			/// (i.e. One after the last timeslice which the Regions control.)
+			/// The timeslice on which the Regions being sold terminate.
 			region_end: Timeslice,
-			/// The number of cores we want to sell, ideally.
-			ideal_cores_sold: CoreIndex,
 			/// Number of cores which are/have been offered for sale.
 			cores_offered: CoreIndex,
+			/// The index of the first core which is for sale.
+			first_core: CoreIndex,
 		},
 		/// A new lease has been created.
 		Leased {

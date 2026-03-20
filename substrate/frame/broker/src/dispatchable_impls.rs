@@ -125,7 +125,6 @@ impl<T: Config> Pallet<T> {
 			&sales_started.old_sale,
 			&sales_started.new_sale,
 			sales_started.new_prices,
-			sales_started.start_price,
 			&status,
 		);
 
@@ -137,10 +136,7 @@ impl<T: Config> Pallet<T> {
 		price_limit: BalanceOf<T>,
 	) -> Result<(), DispatchError> {
 		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
-		let current_price =
-			T::Market::current_price(now).ok_or(Error::<T>::NoSales)?;
-		let bid_price = price_limit.min(current_price);
-		match T::Market::place_order(now, &who, bid_price).map_err(Into::into)? {
+		match T::Market::place_order(now, &who, price_limit).map_err(Into::into)? {
 			OrderResult::BidPlaced { id, bid_price } => {
 				Self::lock_funds(&who, bid_price)?;
 				Self::deposit_event(Event::BidPlaced { bid_id: id, price: bid_price });

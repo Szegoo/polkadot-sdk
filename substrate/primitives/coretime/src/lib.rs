@@ -111,28 +111,6 @@ pub struct PotentialRenewalId {
 	pub when: Timeslice,
 }
 
-/// The phase of a Bulk Coretime Sale.
-#[derive(
-	Encode,
-	Decode,
-	DecodeWithMemTracking,
-	Copy,
-	Clone,
-	PartialEq,
-	Eq,
-	Debug,
-	TypeInfo,
-	MaxEncodedLen,
-)]
-pub enum SalePhase {
-	/// Market period: descending Dutch auction, bids accepted.
-	Market,
-	/// Renewal period: existing tenants can exercise renewal rights.
-	Renewal,
-	/// Settlement period: secondary market trading only, no primary sales.
-	Settlement,
-}
-
 /// The status of a Bulk Coretime Sale.
 #[derive(Encode, Decode, Clone, PartialEq, Eq, Debug, TypeInfo, MaxEncodedLen)]
 pub struct SaleInfoRecord<Balance, BlockNumber> {
