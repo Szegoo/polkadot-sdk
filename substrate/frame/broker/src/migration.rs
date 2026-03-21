@@ -249,9 +249,9 @@ pub mod v4 {
 		for MigrateToV4Impl<T, BlockConversion>
 	where
 		ConfigRecordOf<T>:
-			From<crate::market::LegacyConfigRecord<RelayBlockNumberOf<T>>>,
+			From<crate::market::ConfigRecord<RelayBlockNumberOf<T>>>,
 		SaleInfoRecordOf<T>:
-			From<crate::market::LegacySaleInfoRecord<BalanceOf<T>, RelayBlockNumberOf<T>>>,
+			From<crate::market::SaleInfoRecord<BalanceOf<T>, RelayBlockNumberOf<T>>>,
 	{
 		#[cfg(feature = "try-runtime")]
 		fn pre_upgrade() -> Result<Vec<u8>, sp_runtime::TryRuntimeError> {
@@ -300,7 +300,7 @@ pub mod v4 {
 						config_record.leadin_length,
 					);
 
-				let updated_config_record = crate::market::LegacyConfigRecord {
+				let updated_config_record = crate::market::ConfigRecord {
 					advance_notice: config_record.advance_notice,
 					interlude_length: updated_interlude_length,
 					leadin_length: updated_leadin_length,
@@ -320,7 +320,7 @@ pub mod v4 {
 				let updated_sale_start: RelayBlockNumberOf<T> =
 					BlockConversion::convert_block_number_to_relay_height(sale_info.sale_start);
 
-				let updated_sale_info = crate::market::LegacySaleInfoRecord {
+				let updated_sale_info = crate::market::SaleInfoRecord {
 					sale_start: updated_sale_start,
 					leadin_length: BlockConversion::convert_block_length_to_relay_length(sale_info.leadin_length),
 					end_price: sale_info.price,

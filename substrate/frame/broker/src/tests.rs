@@ -17,8 +17,11 @@
 
 #![cfg(test)]
 
-use crate::{mock::*, *};
-use pallet_coretime_market::SaleInfoRecord;
+use crate::{
+	dispatchable_impls::DoRenewResult,
+	market::{ConfigRecord, Configuration, SaleInfo, SaleInfoRecord, Status},
+	mock::*, *,
+};
 use frame_support::{
 	assert_err, assert_noop, assert_ok,
 	traits::nonfungible::{Inspect as NftInspect, Mutate, Transfer},
@@ -382,15 +385,12 @@ fn migration_works() {
 		// Not ending in this sale period.
 		assert_noop!(Broker::do_renew(1, 0), Error::<Test>::NotAllowed);
 
-		// Advance to the Renewal phase of the sale that covers the lease end.
-		// Sale rotates at block 6 (Sale 2), then at block 12 (Sale 3).
-		// Sale 3: sale_start=12, market_end=15. At block 15 → Renewal phase.
-		advance_to(15);
-		// Should now be renewable during Renewal phase.
-		let balance_before = balance(1);
+		advance_to(12);
+		// Sale is now for regions from TS10..13
+		// Ending in this sale period.
+		// Should now be renewable.
 		assert_ok!(Broker::do_renew(1, 0));
-		let renewal_price = balance_before - balance(1);
-		assert!(renewal_price > 0);
+		assert_eq!(balance(1), 900);
 		advance_to(18);
 
 		let just_pool = || vec![(Pool, 57600)];
@@ -416,23 +416,171 @@ fn renewal_works() {
 		assert_ok!(Broker::do_start_sales(100, 1));
 		advance_to(2);
 		let region = do_purchase_and_get_region_id(1, u64::max_value()).unwrap();
-		// With PriceMultiplier=1, price is flat at reserve=100.
-		assert_eq!(balance(1), b - 100);
+		assert_eq!(balance(1), 99_900);
 		assert_ok!(Broker::do_assign(region, None, 1001, Final));
-
-		// Advance to Sale 2's Renewal phase. Sale rotates at block 6, sale_start=6.
-		// Market settles at block 9 (sale_start + market_period=3) → Renewal phase.
-		advance_to(9);
-		let balance_before_renew = balance(1);
+		// Should now be renewable.
+		advance_to(6);
+		assert_noop!(
+			do_purchase_and_get_region_id(1, u64::max_value()),
+			DispatchError::Other("TooEarly")
+		);
 		let core = do_renew_and_get_the_new_core(1, region.core).unwrap();
-		let renewal_price = balance_before_renew - balance(1);
-		assert!(renewal_price > 0);
-
-		// Advance to Sale 3's Renewal phase. Sale 2 region_begin=7, rotates when
-		// commit_ts >= 7 (block 12). Sale 3: sale_start=12, market_end=15 → Renewal.
-		advance_to(15);
+		assert_eq!(balance(1), 99_800);
+		advance_to(8);
+		assert_noop!(
+			do_purchase_and_get_region_id(1, u64::max_value()),
+			DispatchError::Other("SoldOut")
+		);
+		advance_to(12);
 		assert_ok!(Broker::do_renew(1, core));
+		assert_eq!(balance(1), 99_690);
 	});
+}
+
+#[test]
+/// Renewals have to affect price as well. Otherwise a market where everything is a renewal would
+/// not work. Renewals happening in the leadin or after are effectively competing with the open
+/// market and it makes sense to adjust the price to what was paid here. Assuming all renewals were
+/// done in the interlude and only normal sales happen in the leadin, renewals will have no effect
+/// on price. If there are no cores left for sale on the open markent, renewals will affect price
+/// even in the interlude, making sure renewal prices stay in the range of the open market.
+fn renewals_affect_price() {
+	sp_tracing::try_init_simple();
+	let b = 100_000;
+	let config = ConfigRecord {
+		advance_notice: 2,
+		interlude_length: 10,
+		leadin_length: 20,
+		ideal_bulk_proportion: Perbill::from_percent(100),
+		limit_cores_offered: None,
+		// Region length is in time slices (2 blocks):
+		region_length: 20,
+		renewal_bump: Perbill::from_percent(10),
+		contribution_timeout: 5,
+	};
+	TestExt::new_with_config(config).endow(1, b).execute_with(|| {
+		let price = 910;
+		assert_ok!(Broker::do_start_sales(10, 1));
+		advance_to(11);
+		let region = do_purchase_and_get_region_id(1, u64::max_value()).unwrap();
+		// Price is lower, because already one block in:
+		let b = b - price;
+		assert_eq!(balance(1), b);
+		assert_ok!(Broker::do_assign(region, None, 1001, Final));
+		advance_to(40);
+		assert_noop!(
+			do_purchase_and_get_region_id(1, u64::max_value()),
+			DispatchError::Other("TooEarly")
+		);
+		let core = do_renew_and_get_the_new_core(1, region.core).unwrap();
+		// First renewal has same price as initial purchase.
+		let b = b - price;
+		assert_eq!(balance(1), b);
+		advance_to(51);
+		assert_noop!(
+			do_purchase_and_get_region_id(1, u64::max_value()),
+			DispatchError::Other("SoldOut")
+		);
+		advance_to(81);
+		assert_ok!(Broker::do_renew(1, core));
+		// Renewal bump in effect
+		let price = price + Perbill::from_percent(10) * price;
+		let b = b - price;
+		assert_eq!(balance(1), b);
+
+		// Move after interlude and leadin - should reduce price.
+		advance_to(159);
+		Broker::do_renew(1, region.core).unwrap();
+		let price = price + Perbill::from_percent(10) * price;
+		let b = b - price;
+		assert_eq!(balance(1), b);
+
+		advance_to(161);
+		// Should have the reduced price now:
+		Broker::do_renew(1, region.core).unwrap();
+		let price = 100;
+		let b = b - price;
+		assert_eq!(balance(1), b);
+
+		// Price should be bumped normally again:
+		advance_to(201);
+		Broker::do_renew(1, region.core).unwrap();
+		let price = 110;
+		let b = b - price;
+		assert_eq!(balance(1), b);
+	});
+}
+
+#[test]
+/// Renewals adjust to lower end of market
+fn renewal_price_adjusts_to_lower_market_end() {
+	sp_tracing::try_init_simple();
+	let b = 100_000_000;
+	let region_length_blocks = 40;
+	let config = ConfigRecord {
+		advance_notice: 2,
+		interlude_length: 10,
+		leadin_length: 20,
+		ideal_bulk_proportion: Perbill::from_percent(100),
+		limit_cores_offered: None,
+		// Region length is in time slices (2 blocks):
+		region_length: 20,
+		renewal_bump: Perbill::from_percent(10),
+		contribution_timeout: 5,
+	};
+	TestExt::new_with_config(config.clone())
+		.endow(1, b)
+		.endow(2, b)
+		.execute_with(|| {
+			let price = 910;
+			assert_ok!(Broker::do_start_sales(10, 2));
+			advance_to(11);
+			let region = do_purchase_and_get_region_id(1, u64::max_value()).unwrap();
+			// Price is lower, because already one block in:
+			let b = b - price;
+			assert_eq!(balance(1), b);
+			assert_ok!(Broker::do_assign(region, None, 1001, Final));
+			advance_to(region_length_blocks);
+			assert_noop!(
+				do_purchase_and_get_region_id(1, u64::max_value()),
+				DispatchError::Other("TooEarly")
+			);
+
+			let core = do_renew_and_get_the_new_core(1, region.core).unwrap();
+			// First renewal has same price as initial purchase.
+			let b = b - price;
+			assert_eq!(balance(1), b);
+			// Ramp up price:
+			advance_to(region_length_blocks + config.interlude_length + 1);
+			do_purchase_and_get_region_id(2, u64::max_value()).unwrap();
+
+			advance_to(2 * region_length_blocks);
+			assert_ok!(Broker::do_renew(1, core));
+			// Renewal bump in effect
+			let price = price + Perbill::from_percent(10) * price;
+			let b = b - price;
+			assert_eq!(balance(1), b);
+			// Ramp up price again:
+			advance_to(2 * region_length_blocks + config.interlude_length + 1);
+			do_purchase_and_get_region_id(2, u64::max_value()).unwrap();
+
+			advance_to(3 * region_length_blocks);
+			assert_ok!(Broker::do_renew(1, core));
+			// Renewal bump still in effect
+			let price = price + Perbill::from_percent(10) * price;
+			let b = b - price;
+			assert_eq!(balance(1), b);
+			// No further price ramp up necessary - the price of this sale is relevant for next
+			// renewal.
+			let end_price = SaleInfo::<Test>::get().unwrap().end_price;
+
+			advance_to(4 * region_length_blocks);
+			assert_ok!(Broker::do_renew(1, core));
+			// Renewal bump trumped by end price of previous sale.
+			let price = end_price;
+			let b = b - price;
+			assert_eq!(balance(1), b);
+		});
 }
 
 #[test]
@@ -702,7 +850,7 @@ fn force_unpool_works() {
 		assert_eq!(Io::get(region.end), PoolIoRecord { private: -80, system: 0 });
 
 		// Force unpool before the region begins.
-		let status = Broker::market_status().unwrap();
+		let status = Status::<Test>::get().unwrap();
 		Broker::force_unpool_region(region_id, &region, &status);
 		System::assert_last_event(
 			Event::<Test>::RegionUnpooled { region_id, when: region_id.begin }.into(),
@@ -739,7 +887,7 @@ fn force_unpool_works() {
 		// Check the Io right now at key timeslices and then force unpool.
 		assert_eq!(Io::get(region.end), PoolIoRecord { private: -80, system: 0 });
 		assert_eq!(Io::get(current_timeslice), PoolIoRecord { private: 0, system: 0 });
-		let status = Broker::market_status().unwrap();
+		let status = Status::<Test>::get().unwrap();
 		Broker::force_unpool_region(region_id, &region, &status);
 
 		// Check that it is unpooled from the next uncommitted timeslice.
@@ -1361,7 +1509,7 @@ fn short_leases_are_cleaned() {
 		assert_eq!(Leases::<Test>::get().len(), 1);
 
 		// But are cleaned up in the next rotate_sale.
-		let config = Broker::market_configuration().unwrap();
+		let config = Configuration::<Test>::get().unwrap();
 		let timeslice_period: u64 = <Test as Config>::TimeslicePeriod::get();
 		advance_to(timeslice_period.saturating_mul(config.region_length.into()));
 		assert_eq!(Leases::<Test>::get().len(), 0);
@@ -1388,8 +1536,7 @@ fn leases_can_be_renewed() {
 		assert_eq!(
 			PotentialRenewals::<Test>::get(PotentialRenewalId { core: 0, when: 10 }),
 			Some(PotentialRenewalRecord {
-				// CenterTargetPrice: clearing=100 → target=100
-				price: 100,
+				price: 1000,
 				completion: CompletionStatus::Complete(
 					vec![ScheduleItem { mask: CoreMask::complete(), assignment: Task(2001) }]
 						.try_into()
@@ -1402,13 +1549,9 @@ fn leases_can_be_renewed() {
 
 		// Advance to sale period 2, where we can renew.
 		advance_sale_period();
-		// Advance to Renewal phase so do_renew gets the Sold result with full bookkeeping.
-		advance_to_renewal_phase();
-		let balance_before = balance(1);
 		assert_ok!(Broker::do_renew(1, 0));
-		// Renewal price is the auction clearing price (reserve price when no bids).
-		let renewal_cost = balance_before - balance(1);
-		assert!(renewal_cost > 0);
+		// We renew for the price of the previous sale period.
+		assert_eq!(balance(1), initial_balance - 1000);
 
 		// We just renewed for this period.
 		advance_sale_period();
@@ -1557,6 +1700,48 @@ fn remove_lease_works() {
 }
 
 #[test]
+fn purchase_requires_valid_status_and_sale_info() {
+	TestExt::new().execute_with(|| {
+		assert_noop!(do_purchase_and_get_region_id(1, 100), DispatchError::Other("NoSales"));
+
+		let status = StatusRecord {
+			core_count: 2,
+			private_pool_size: 0,
+			system_pool_size: 0,
+			last_committed_timeslice: 0,
+			last_timeslice: 1,
+		};
+		Status::<Test>::put(&status);
+		assert_noop!(do_purchase_and_get_region_id(1, 100), DispatchError::Other("NoSales"));
+
+		let mut dummy_sale = SaleInfoRecord {
+			sale_start: 0,
+			leadin_length: 0,
+			end_price: 200,
+			sellout_price: None,
+			region_begin: 0,
+			region_end: 3,
+			first_core: 3,
+			ideal_cores_sold: 0,
+			cores_offered: 1,
+			cores_sold: 2,
+		};
+		SaleInfo::<Test>::put(&dummy_sale);
+		assert_noop!(do_purchase_and_get_region_id(1, 100), DispatchError::Other("Unavailable"));
+
+		dummy_sale.first_core = 1;
+		SaleInfo::<Test>::put(&dummy_sale);
+		assert_noop!(do_purchase_and_get_region_id(1, 100), DispatchError::Other("SoldOut"));
+
+		assert_ok!(Broker::do_start_sales(200, 1));
+		assert_noop!(do_purchase_and_get_region_id(1, 100), DispatchError::Other("TooEarly"));
+
+		advance_to(2);
+		assert_noop!(do_purchase_and_get_region_id(1, 100), DispatchError::Other("Overpriced"));
+	});
+}
+
+#[test]
 fn renewal_requires_valid_status_and_sale_info() {
 	TestExt::new().execute_with(|| {
 		assert_noop!(Broker::do_renew(1, 1), Error::<Test>::NoSales);
@@ -1568,14 +1753,14 @@ fn renewal_requires_valid_status_and_sale_info() {
 			last_committed_timeslice: 0,
 			last_timeslice: 1,
 		};
-		Broker::set_market_status(status);
+		Status::<Test>::put(&status);
 		assert_noop!(Broker::do_renew(1, 1), Error::<Test>::NoSales);
 
 		let mut dummy_sale = SaleInfoRecord {
 			sale_start: 0,
-			opening_price: 200,
-			reserve_price: 200,
-			clearing_price: None,
+			leadin_length: 0,
+			end_price: 200,
+			sellout_price: None,
 			region_begin: 0,
 			region_end: 3,
 			first_core: 3,
@@ -1583,11 +1768,11 @@ fn renewal_requires_valid_status_and_sale_info() {
 			cores_offered: 1,
 			cores_sold: 2,
 		};
-		Broker::set_market_sale_info(dummy_sale.clone());
+		SaleInfo::<Test>::put(&dummy_sale);
 		assert_noop!(Broker::do_renew(1, 1), Error::<Test>::NotAllowed);
 
 		dummy_sale.first_core = 1;
-		Broker::set_market_sale_info(dummy_sale);
+		SaleInfo::<Test>::put(&dummy_sale);
 		assert_noop!(Broker::do_renew(1, 1), Error::<Test>::NotAllowed);
 
 		assert_ok!(Broker::do_start_sales(200, 1));
@@ -1698,7 +1883,7 @@ fn config_works() {
 		// Good config works:
 		assert_ok!(Broker::configure(Root.into(), cfg.clone()));
 		// Bad config is a noop:
-		cfg.market_period = 0;
+		cfg.leadin_length = 0;
 		assert_noop!(Broker::configure(Root.into(), cfg), Error::<Test>::InvalidConfig);
 	});
 }
@@ -1707,7 +1892,7 @@ fn config_works() {
 #[test]
 fn renewal_works_leases_ended_before_start_sales() {
 	TestExt::new().endow(1, 100_000).execute_with(|| {
-		let config = Broker::market_configuration().unwrap();
+		let config = Configuration::<Test>::get().unwrap();
 
 		// This lease is ended before `start_stales` was called.
 		assert_ok!(Broker::do_set_lease(1, 1));
@@ -1731,42 +1916,32 @@ fn renewal_works_leases_ended_before_start_sales() {
 
 		// This intializes the second and the period 1.
 		advance_sale_period();
-		// Advance to Renewal phase so do_renew gets an immediate Sold result.
-		advance_to_renewal_phase();
 
 		// Now we can finally renew the core 0 of task 1.
-		let balance_before_1 = balance(1);
 		let new_core = do_renew_and_get_the_new_core(1, 0).unwrap();
 		// Renewing the active lease doesn't work.
 		assert_noop!(Broker::do_renew(1, 1), Error::<Test>::NotAllowed);
-		let renewal_cost_1 = balance_before_1 - balance(1);
-		assert!(renewal_cost_1 > 0);
+		assert_eq!(balance(1), 99000);
 
 		// This intializes the third sale and the period 2.
 		advance_sale_period();
-		advance_to_renewal_phase();
-		let balance_before_2 = balance(1);
 		let new_core = do_renew_and_get_the_new_core(1, new_core).unwrap();
 
 		// Renewing the active lease doesn't work.
 		assert_noop!(Broker::do_renew(1, 0), Error::<Test>::NotAllowed);
-		let renewal_cost_2 = balance_before_2 - balance(1);
-		assert!(renewal_cost_2 > 0);
+		assert_eq!(balance(1), 98900);
 
 		// All leases should have ended
 		assert!(Leases::<Test>::get().is_empty());
 
 		// This intializes the fourth sale and the period 3.
 		advance_sale_period();
-		advance_to_renewal_phase();
 
 		// Renew again
-		let balance_before_3 = balance(1);
 		assert_eq!(0, do_renew_and_get_the_new_core(1, new_core).unwrap());
 		// Renew the task 2.
 		assert_eq!(1, do_renew_and_get_the_new_core(1, 0).unwrap());
-		let renewal_cost_3 = balance_before_3 - balance(1);
-		assert!(renewal_cost_3 > 0);
+		assert_eq!(balance(1), 98790);
 
 		// This intializes the fifth sale and the period 4.
 		advance_sale_period();
@@ -1856,17 +2031,13 @@ fn enable_auto_renew_works() {
 	TestExt::new().endow(1, 1000).limit_cores_offered(Some(10)).execute_with(|| {
 		assert_ok!(Broker::do_start_sales(100, 5));
 		advance_to(2);
-
-		// Batch all 4 purchases in one market phase, then settle.
-		let regions = do_purchase_batch(1, 4);
-		assert_eq!(regions.len(), 4);
-		let region_id = regions[0];
+		let region_id = do_purchase_and_get_region_id(1, u64::max_value()).unwrap();
 		let record = Regions::<Test>::get(region_id).unwrap();
 
 		// Cannot enable auto renewal with provisional finality:
 		assert_ok!(Broker::do_assign(region_id, Some(1), 1001, Provisional));
 		assert_noop!(
-			Broker::do_enable_auto_renew(1001, region_id.core, 1001, Some(record.end)),
+			Broker::do_enable_auto_renew(1001, region_id.core, 1001, Some(7)),
 			Error::<Test>::NotAllowed
 		);
 
@@ -1880,49 +2051,44 @@ fn enable_auto_renew_works() {
 
 		// Only the task's sovereign account can enable auto renewal.
 		assert_noop!(
-			Broker::enable_auto_renew(
-				RuntimeOrigin::signed(1),
-				region_id.core,
-				1001,
-				Some(record.end)
-			),
+			Broker::enable_auto_renew(RuntimeOrigin::signed(1), region_id.core, 1001, Some(7)),
 			Error::<Test>::NoPermission
 		);
 
 		// Works when calling with the sovereign account:
-		assert_ok!(Broker::do_enable_auto_renew(1001, region_id.core, 1001, Some(record.end)));
+		assert_ok!(Broker::do_enable_auto_renew(1001, region_id.core, 1001, Some(7)));
 		assert_eq!(
 			AutoRenewals::<Test>::get().to_vec(),
-			vec![AutoRenewalRecord { core: region_id.core, task: 1001, next_renewal: record.end }]
+			vec![AutoRenewalRecord { core: 0, task: 1001, next_renewal: 7 }]
 		);
 		System::assert_has_event(
 			Event::<Test>::AutoRenewalEnabled { core: region_id.core, task: 1001 }.into(),
 		);
 
 		// Enabling auto-renewal for more cores to ensure they are sorted based on core index.
-		let region_2 = regions[1];
-		let region_3 = regions[2];
+		let region_2 = do_purchase_and_get_region_id(1, u64::max_value()).unwrap();
+		let region_3 = do_purchase_and_get_region_id(1, u64::max_value()).unwrap();
 		assert_ok!(Broker::do_assign(region_2, Some(1), 1002, Final));
 		assert_ok!(Broker::do_assign(region_3, Some(1), 1003, Final));
-		assert_ok!(Broker::do_enable_auto_renew(1003, region_3.core, 1003, Some(record.end)));
-		assert_ok!(Broker::do_enable_auto_renew(1002, region_2.core, 1002, Some(record.end)));
+		assert_ok!(Broker::do_enable_auto_renew(1003, region_3.core, 1003, Some(7)));
+		assert_ok!(Broker::do_enable_auto_renew(1002, region_2.core, 1002, Some(7)));
 
 		assert_eq!(
 			AutoRenewals::<Test>::get().to_vec(),
 			vec![
-				AutoRenewalRecord { core: region_id.core, task: 1001, next_renewal: record.end },
-				AutoRenewalRecord { core: region_2.core, task: 1002, next_renewal: record.end },
-				AutoRenewalRecord { core: region_3.core, task: 1003, next_renewal: record.end },
+				AutoRenewalRecord { core: 0, task: 1001, next_renewal: 7 },
+				AutoRenewalRecord { core: 1, task: 1002, next_renewal: 7 },
+				AutoRenewalRecord { core: 2, task: 1003, next_renewal: 7 },
 			]
 		);
 
 		// Ensure that we cannot enable more auto renewals than `MaxAutoRenewals`.
 		// We already enabled it for three cores, and the limit is set to 3.
-		let region_4 = regions[3];
+		let region_4 = do_purchase_and_get_region_id(1, u64::max_value()).unwrap();
 		assert_ok!(Broker::do_assign(region_4, Some(1), 1004, Final));
 
 		assert_noop!(
-			Broker::do_enable_auto_renew(1004, region_4.core, 1004, Some(record.end)),
+			Broker::do_enable_auto_renew(1004, region_4.core, 1004, Some(7)),
 			Error::<Test>::TooManyAutoRenewals
 		);
 	});
@@ -1962,32 +2128,27 @@ fn enable_auto_renewal_works_for_legacy_leases() {
 		);
 		System::assert_has_event(Event::<Test>::AutoRenewalEnabled { core: 0, task: 1001 }.into());
 
-		// Advance to the sale cycle with region_begin=7. The renewal is scheduled at
-		// next_renewal=10, so it should be skipped (10 > 7).
-		advance_sale_period();
+		// Next cycle starting at 7.
+		advance_to(7);
 
-		// Ensure that the renewal didn't happen by checking that the balance remained the same.
+		// Ensure that the renewal didn't happen by checking that the balance remained the same, as
+		// there is still no need to renew.
 		assert_eq!(balance(1001), 1000);
 
-		// Advance to the sale whose region_begin >= 10. The renewal should happen during
-		// that sale's Renewal phase.
-		// Sale 3 has region_begin=10. Advance to its Renewal phase.
-		advance_sale_period();
-		advance_to_renewal_phase();
-
-		let balance_after = balance(1001);
-		assert!(balance_after < 1000, "Renewal should have charged the account");
+		// The next sale starts at 13. The renewal should happen now and the account should be
+		// charged.
+		advance_to(13);
+		assert_eq!(balance(1001), 900);
 
 		// Make sure that the renewal happened:
-		let sale = Broker::market_sale_info().unwrap();
 		System::assert_has_event(
 			Event::<Test>::Renewed {
-				who: 1001,
+				who: 1001, // sovereign account
 				old_core: 0,
 				core: 0,
-				price: 1000 - balance_after,
-				begin: sale.region_begin,
-				duration: sale.region_end - sale.region_begin,
+				price: 100,
+				begin: 10,
+				duration: 3,
 				workload: Schedule::truncate_from(vec![ScheduleItem {
 					assignment: Task(1001),
 					mask: CoreMask::complete(),
@@ -2004,48 +2165,37 @@ fn enable_auto_renew_renews() {
 		assert_ok!(Broker::do_start_sales(100, 1));
 		advance_to(2);
 		let region_id = do_purchase_and_get_region_id(1, u64::max_value()).unwrap();
-		let record = Regions::<Test>::get(region_id).unwrap();
 
 		assert_ok!(Broker::do_assign(region_id, Some(1), 1001, Final));
-		// Advance past the next sale start (sale_start=6, need block > sale_start).
-		advance_to(7);
+		// advance to next bulk sale:
+		advance_to(6);
 
-		// Since we didn't renew for the next bulk period, enabling auto-renewal will defer
-		// the renewal to the Renewal phase (via renew_cores). No funds are needed yet.
-		assert_ok!(Broker::do_enable_auto_renew(1001, region_id.core, 1001, None));
+		// Since we didn't renew for the next bulk period, enabling auto-renewal will renew,
+		// ensuring the task continues execution.
 
-		// Fund the sovereign account so the renewal succeeds during Renewal phase.
+		// Will fail because we didn't fund the sovereign account:
+		assert_noop!(
+			Broker::do_enable_auto_renew(1001, region_id.core, 1001, None),
+			TokenError::FundsUnavailable
+		);
+
+		// Will succeed after funding the sovereign account:
 		endow(1001, 1000);
-		// During Market phase, the renewal is deferred. next_renewal is set to region_begin
-		// so renew_cores will pick it up during the Renewal phase.
-		let sale = Broker::market_sale_info().unwrap();
+
+		assert_ok!(Broker::do_enable_auto_renew(1001, region_id.core, 1001, None));
 		assert_eq!(
 			AutoRenewals::<Test>::get().to_vec(),
-			vec![AutoRenewalRecord {
-				core: region_id.core,
-				task: 1001,
-				next_renewal: sale.region_begin
-			}]
+			vec![AutoRenewalRecord { core: 0, task: 1001, next_renewal: 10 }]
 		);
-		// PotentialRenewal still at the original location (not yet consumed).
 		assert!(PotentialRenewals::<Test>::get(PotentialRenewalId {
 			core: region_id.core,
-			when: record.end
+			when: 10
 		})
 		.is_some());
 
 		System::assert_has_event(
 			Event::<Test>::AutoRenewalEnabled { core: region_id.core, task: 1001 }.into(),
 		);
-
-		// Advance to Renewal phase — this triggers renew_cores which processes the deferred
-		// renewal, consuming the PotentialRenewal and creating a new one.
-		advance_to_renewal_phase();
-		assert!(PotentialRenewals::<Test>::get(PotentialRenewalId {
-			core: region_id.core,
-			when: sale.region_end
-		})
-		.is_some());
 	});
 }
 
@@ -2054,39 +2204,23 @@ fn auto_renewal_works() {
 	TestExt::new().endow(1, 1000).execute_with(|| {
 		assert_ok!(Broker::do_start_sales(100, 3));
 		advance_to(2);
-
-		// Batch all 3 purchases.
-		let regions = do_purchase_batch(1, 3);
-		let region_1 = regions[0];
-		let region_2 = regions[1];
-		let region_3 = regions[2];
-		let record = Regions::<Test>::get(region_1).unwrap();
+		let region_1 = do_purchase_and_get_region_id(1, u64::max_value()).unwrap();
+		let region_2 = do_purchase_and_get_region_id(1, u64::max_value()).unwrap();
+		let region_3 = do_purchase_and_get_region_id(1, u64::max_value()).unwrap();
 
 		// Eligible for renewal after final assignment:
 		assert_ok!(Broker::do_assign(region_1, Some(1), 1001, Final));
 		assert_ok!(Broker::do_assign(region_2, Some(1), 1002, Final));
 		assert_ok!(Broker::do_assign(region_3, Some(1), 1003, Final));
-		assert_ok!(Broker::do_enable_auto_renew(1001, region_1.core, 1001, Some(record.end)));
-		assert_ok!(Broker::do_enable_auto_renew(1002, region_2.core, 1002, Some(record.end)));
-		assert_ok!(Broker::do_enable_auto_renew(1003, region_3.core, 1003, Some(record.end)));
+		assert_ok!(Broker::do_enable_auto_renew(1001, region_1.core, 1001, Some(7)));
+		assert_ok!(Broker::do_enable_auto_renew(1002, region_2.core, 1002, Some(7)));
+		assert_ok!(Broker::do_enable_auto_renew(1003, region_3.core, 1003, Some(7)));
 		assert_eq!(
 			AutoRenewals::<Test>::get().to_vec(),
 			vec![
-				AutoRenewalRecord {
-					core: region_1.core,
-					task: 1001,
-					next_renewal: record.end
-				},
-				AutoRenewalRecord {
-					core: region_2.core,
-					task: 1002,
-					next_renewal: record.end
-				},
-				AutoRenewalRecord {
-					core: region_3.core,
-					task: 1003,
-					next_renewal: record.end
-				},
+				AutoRenewalRecord { core: 0, task: 1001, next_renewal: 7 },
+				AutoRenewalRecord { core: 1, task: 1002, next_renewal: 7 },
+				AutoRenewalRecord { core: 2, task: 1003, next_renewal: 7 },
 			]
 		);
 
@@ -2095,27 +2229,16 @@ fn auto_renewal_works() {
 		// We skip funding the sovereign account of task 1002 on purpose.
 		endow(1003, 1000);
 
-		// Auto-renewals fire during the Renewal phase transition.
-		// Advance to the Renewal phase of the sale whose region_begin matches next_renewal.
-		let sale = Broker::market_sale_info().unwrap();
-		// We need the sale whose region_begin = record.end. Advance to that sale's Renewal.
-		let timeslice_period: u64 = <Test as Config>::TimeslicePeriod::get();
-		let target_block = record.end as u64 * timeslice_period;
-		advance_to(target_block);
-		// Now in the sale where region_begin = record.end. Advance to its Renewal phase.
-		advance_to_renewal_phase();
-
-		let sale = Broker::market_sale_info().unwrap();
-
-		// Task 1001 got renewed:
+		// Next cycle starting at 7.
+		advance_to(7);
 		System::assert_has_event(
 			Event::<Test>::Renewed {
-				who: 1001,
-				old_core: region_1.core,
-				core: region_1.core,
-				price: sale.reserve_price,
-				begin: sale.region_begin,
-				duration: sale.region_end - sale.region_begin,
+				who: 1001, // sovereign account
+				old_core: 0,
+				core: 0,
+				price: 100,
+				begin: 7,
+				duration: 3,
 				workload: Schedule::truncate_from(vec![ScheduleItem {
 					assignment: Task(1001),
 					mask: CoreMask::complete(),
@@ -2125,15 +2248,33 @@ fn auto_renewal_works() {
 		);
 		// Sovereign account wasn't funded so it fails:
 		System::assert_has_event(
-			Event::<Test>::AutoRenewalFailed { core: region_2.core, payer: Some(1002) }.into(),
+			Event::<Test>::AutoRenewalFailed { core: 1, payer: Some(1002) }.into(),
 		);
-		// Task 1003 renewed — takes the place of failed core.
-		let auto_renewals = AutoRenewals::<Test>::get().to_vec();
-		assert_eq!(auto_renewals.len(), 2);
-		assert_eq!(auto_renewals[0].task, 1001);
-		assert_eq!(auto_renewals[0].next_renewal, sale.region_end);
-		assert_eq!(auto_renewals[1].task, 1003);
-		assert_eq!(auto_renewals[1].next_renewal, sale.region_end);
+		System::assert_has_event(
+			Event::<Test>::Renewed {
+				who: 1003, // sovereign account
+				old_core: 2,
+				core: 1, // Core #1 didn't get renewed, so core #2 will take its place.
+				price: 100,
+				begin: 7,
+				duration: 3,
+				workload: Schedule::truncate_from(vec![ScheduleItem {
+					assignment: Task(1003),
+					mask: CoreMask::complete(),
+				}]),
+			}
+			.into(),
+		);
+
+		// Given that core #1 didn't get renewed due to the account not being sufficiently funded,
+		// Task (1003) will now be assigned to that core instead of core #2.
+		assert_eq!(
+			AutoRenewals::<Test>::get().to_vec(),
+			vec![
+				AutoRenewalRecord { core: 0, task: 1001, next_renewal: 10 },
+				AutoRenewalRecord { core: 1, task: 1003, next_renewal: 10 },
+			]
+		);
 	});
 }
 
@@ -2143,56 +2284,53 @@ fn enable_auto_renew_immediate_updates_core_and_renews() {
 		assert_ok!(Broker::do_start_sales(100, 2));
 		advance_to(2);
 		let region_id = do_purchase_and_get_region_id(1, u64::max_value()).unwrap();
-		let record = Regions::<Test>::get(region_id).unwrap();
 		assert_ok!(Broker::do_assign(region_id, Some(1), 1001, Final));
 
 		// Rotate into the next sale where this region is renewable.
-		// PotentialRenewal is at when=record.end; the next sale will have region_begin=record.end.
+		let sale = SaleInfo::<Test>::get().unwrap();
 		let timeslice_period: u64 = <Test as Config>::TimeslicePeriod::get();
-		advance_sale_period();
+		let next_sale_block = sale.region_begin as u64 * timeslice_period;
+		advance_to(next_sale_block);
 
-		let sale = Broker::market_sale_info().unwrap();
+		let sale = SaleInfo::<Test>::get().unwrap();
 		if System::block_number() <= sale.sale_start {
 			advance_to(sale.sale_start + 1);
 		}
 
 		// Pre-sell a core to ensure the renewal allocates a different core index.
-		// Place the bid without settling (just place the bid during Market phase).
-		assert_ok!(Broker::do_purchase(2, u64::max_value()));
+		let _ = do_purchase_and_get_region_id(2, u64::max_value()).unwrap();
+		let sale_before_renew = SaleInfo::<Test>::get().unwrap();
+		let expected_new_core = sale_before_renew.first_core + sale_before_renew.cores_sold;
+		assert_ne!(expected_new_core, region_id.core);
 
-		// Advance to Renewal phase — this settles the auction (pre-sell becomes an
-		// allocation) and transitions to Renewal.
-		advance_to_renewal_phase();
-		let sale = Broker::market_sale_info().unwrap();
-
-		// During Renewal phase, do_enable_auto_renew calls do_renew which returns Sold
-		// with a different core index (since the pre-sold core took the first slot).
 		assert_ok!(Broker::do_enable_auto_renew(1001, region_id.core, 1001, None));
 
 		// Auto-renewal record should follow the new core.
-		let auto = AutoRenewals::<Test>::get().to_vec();
-		assert_eq!(auto.len(), 1);
-		assert_eq!(auto[0].task, 1001);
-		assert_eq!(auto[0].next_renewal, sale.region_end);
-		let new_core = auto[0].core;
-		assert_ne!(new_core, region_id.core);
+		assert_eq!(
+			AutoRenewals::<Test>::get().to_vec(),
+			vec![AutoRenewalRecord {
+				core: expected_new_core,
+				task: 1001,
+				next_renewal: sale_before_renew.region_end
+			}]
+		);
 
 		// Potential renewal moved to the new core index.
 		assert!(PotentialRenewals::<Test>::get(PotentialRenewalId {
-			core: new_core,
-			when: sale.region_end
+			core: expected_new_core,
+			when: sale_before_renew.region_end
 		})
 		.is_some());
 		assert!(PotentialRenewals::<Test>::get(PotentialRenewalId {
 			core: region_id.core,
-			when: sale.region_end
+			when: sale_before_renew.region_end
 		})
 		.is_none());
 
 		// Next rotation should renew again and keep auto-renewal enabled.
-		advance_sale_period();
-		advance_to_renewal_phase();
-		let sale_after_renew = Broker::market_sale_info().unwrap();
+		let next_block = sale_before_renew.region_end as u64 * timeslice_period;
+		advance_to(next_block);
+		let sale_after_renew = SaleInfo::<Test>::get().unwrap();
 		let auto_after_renew = AutoRenewals::<Test>::get().to_vec();
 		assert_eq!(auto_after_renew.len(), 1);
 		assert_eq!(auto_after_renew[0].task, 1001);
@@ -2298,7 +2436,7 @@ fn reserve_works() {
 		// assert_noop!(Broker::do_reserve(system_workload.clone()), Error::<Test>::Unavailable);
 
 		// Add another core and create the reservation.
-		let status = Broker::market_status().unwrap();
+		let status = Status::<Test>::get().unwrap();
 		assert_ok!(Broker::request_core_count(RuntimeOrigin::root(), status.core_count + 1));
 		assert_ok!(Broker::reserve(RuntimeOrigin::root(), system_workload.clone()));
 
@@ -2370,7 +2508,7 @@ fn can_reserve_workloads_quickly() {
 		// assert_noop!(Broker::do_reserve(system_workload.clone()), Error::<Test>::Unavailable);
 
 		// Add another core and create the reservation.
-		let core_count = Broker::market_status().unwrap().core_count;
+		let core_count = Status::<Test>::get().unwrap().core_count;
 		assert_ok!(Broker::request_core_count(RuntimeOrigin::root(), core_count + 1));
 		assert_ok!(Broker::reserve(RuntimeOrigin::root(), system_workload.clone()));
 
@@ -2496,26 +2634,10 @@ fn force_reserve_works() {
 		advance_sale_period();
 		advance_sale_period();
 
-		// Place bid during Market phase, then force_reserve before settling.
-		// force_reserve needs to run before timeslice 9 is committed (by settle_market)
-		// so that the immediate workplan assignment is included.
-		assert_ok!(Broker::do_purchase(1, u64::max_value()));
-		assert_ok!(Broker::force_reserve(RuntimeOrigin::root(), system_workload.clone(), 3));
-
-		// Now settle the market to get the purchased region.
-		settle_market();
-		let region = System::events()
-			.into_iter()
-			.rev()
-			.find_map(|e| {
-				if let RuntimeEvent::Broker(Event::Purchased { region_id, who: 1, .. }) = e.event {
-					Some(region_id)
-				} else {
-					None
-				}
-			})
-			.expect("purchase event must exist");
+		let region = do_purchase_and_get_region_id(1, u64::max_value()).unwrap();
 		assert_ok!(Broker::do_assign(region, None, 1001, Final));
+
+		assert_ok!(Broker::force_reserve(RuntimeOrigin::root(), system_workload.clone(), 3));
 
 		assert_eq!(
 			Reservations::<Test>::get(),
@@ -2721,15 +2843,9 @@ fn remove_potential_renewal_works() {
 
 		assert_eq!(PotentialRenewals::<Test>::iter().count(), 0);
 
-		// Batch both purchases in one market phase.
-		let regions = do_purchase_batch(1, 2);
-		let region_id = regions[0];
-		let new_region_id = regions[1];
+		let region_id = do_purchase_and_get_region_id(1, u64::max_value()).unwrap();
 		let region = Regions::<Test>::get(region_id).unwrap();
-		let new_region = Regions::<Test>::get(new_region_id).unwrap();
-
 		const TASK_ID: TaskId = 1111;
-		const NEW_TASK_ID: TaskId = 2222;
 		Broker::do_assign(region_id, None, TASK_ID, Finality::Final).unwrap();
 
 		// When assigning task to the region it's expected that the potential renewal with the
@@ -2746,7 +2862,11 @@ fn remove_potential_renewal_works() {
 			Error::<Test>::UnknownRenewal
 		);
 
+		let new_region_id = do_purchase_and_get_region_id(1, u64::max_value()).unwrap();
+		let new_region = Regions::<Test>::get(new_region_id).unwrap();
+		const NEW_TASK_ID: TaskId = 2222;
 		Broker::do_assign(new_region_id, None, NEW_TASK_ID, Finality::Final).unwrap();
+
 		assert_eq!(PotentialRenewals::<Test>::iter().count(), 2);
 
 		// Check that target renewal is not expired, so ensure that `do_remove_potential_renewal`
@@ -2783,11 +2903,8 @@ fn remove_potential_renewal_makes_auto_renewal_die() {
 		const TASK_ID: TaskId = 1111;
 		Broker::do_assign(region_id, None, TASK_ID, Finality::Final).unwrap();
 
-		// Advance past sale_start of next sale (sale_start=6, need > 6).
-		advance_to(7);
+		advance_to(6);
 
-		// Enable auto-renew. During Market phase, the renewal bid is placed and closed.
-		// The auto-renewal is deferred to the Renewal phase.
 		Broker::do_enable_auto_renew(1, region_id.core, TASK_ID, None).unwrap();
 
 		assert_eq!(AutoRenewals::<Test>::get().len(), 1);
@@ -2798,12 +2915,7 @@ fn remove_potential_renewal_makes_auto_renewal_die() {
 
 		assert_eq!(AutoRenewals::<Test>::get().len(), 1);
 
-		// Advance to the Renewal phase — renew_cores will try to renew but fail because
-		// the PotentialRenewal was removed.
-		advance_to_renewal_phase();
-		// Then advance further so the next sale's Renewal phase also runs.
-		advance_sale_period();
-		advance_to_renewal_phase();
+		advance_to(12);
 
 		assert_eq!(AutoRenewals::<Test>::get().len(), 0);
 	})
@@ -2934,77 +3046,11 @@ fn do_renew_and_get_the_new_core(
 	who: <Test as frame_system::Config>::AccountId,
 	core: CoreIndex,
 ) -> Result<CoreIndex, DispatchError> {
-	match Broker::do_renew(who, core)? {
-		crate::dispatchable_impls::DoRenewResult::Renewed { new_core } => Ok(new_core),
-	}
-}
+	let DoRenewResult::Renewed { new_core } = Broker::do_renew(who, core)? else {
+		panic!("It's expected that do_renew will immediately resolve")
+	};
 
-/// Place multiple purchase bids during the current market phase, then settle.
-/// Returns region IDs for all bids by the given buyer.
-fn do_purchase_batch(who: u64, count: usize) -> Vec<RegionId> {
-	for _ in 0..count {
-		Broker::do_purchase(who, u64::max_value()).unwrap();
-	}
-	settle_market();
-	System::events()
-		.into_iter()
-		.filter_map(|e| match e.event {
-			RuntimeEvent::Broker(Event::Purchased { region_id, who: buyer, .. })
-				if buyer == who =>
-				Some(region_id),
-			_ => None,
-		})
-		.collect()
-}
-
-/// Place a bid in the current auction and advance through settlement + finalization
-/// to get the region issued. Returns the region ID from the `Purchased` event.
-#[test]
-fn raise_bid_works() {
-	TestExt::new().endow(1, 1000).execute_with(|| {
-		assert_ok!(Broker::do_start_sales(100, 1));
-		advance_to(2);
-
-		// Get current descending price, bid below it to leave room to raise.
-		let current_price =
-			<CoretimeMarket as sp_coretime::MarketState>::current_price(2).unwrap();
-		let initial_bid = current_price / 2;
-
-		let initial_balance = balance(1);
-		assert_ok!(Broker::do_purchase(1, initial_bid));
-		let held_after_bid = initial_balance - balance(1);
-		assert_eq!(held_after_bid, initial_bid);
-
-		// First bid gets ID 0.
-		let bid_id: u32 = 0;
-
-		// Raise the bid to the current price.
-		let new_price = current_price;
-		let additional = new_price - initial_bid;
-		assert_ok!(Broker::do_raise_bid(1, bid_id, new_price));
-		let held_after_raise = initial_balance - balance(1);
-		assert_eq!(held_after_raise, new_price);
-
-		// Verify the event was emitted.
-		System::assert_has_event(
-			Event::BidRaised { bid_id, new_price, additional }.into(),
-		);
-	});
-}
-
-#[test]
-fn raise_bid_fails_for_wrong_owner() {
-	TestExt::new().endow(1, 1000).endow(2, 1000).execute_with(|| {
-		assert_ok!(Broker::do_start_sales(100, 1));
-		advance_to(2);
-		assert_ok!(Broker::do_purchase(1, u64::max_value()));
-
-		// Account 2 tries to raise account 1's bid.
-		assert_noop!(
-			Broker::do_raise_bid(2, 0, 500),
-			DispatchError::Other("BidNotExist"),
-		);
-	});
+	Ok(new_core)
 }
 
 fn do_purchase_and_get_region_id(
@@ -3013,16 +3059,9 @@ fn do_purchase_and_get_region_id(
 ) -> Result<RegionId, DispatchError> {
 	Broker::do_purchase(who, price_limit)?;
 
-	// Advance through market end + renewal end to trigger settlement + finalization.
-	// The finalization step issues TickAction::SellRegion which creates the Purchased event.
-	settle_market();
-
 	for event in System::events().into_iter().rev() {
-		if let RuntimeEvent::Broker(Event::Purchased { region_id, who: buyer, .. }) = event.event
-		{
-			if buyer == who {
-				return Ok(region_id);
-			}
+		if let RuntimeEvent::Broker(Event::Purchased { region_id, .. }) = event.event {
+			return Ok(region_id);
 		}
 	}
 

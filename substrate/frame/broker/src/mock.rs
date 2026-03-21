@@ -18,7 +18,6 @@
 #![cfg(test)]
 
 use crate::{test_fungibles::TestFungibles, *};
-use pallet_coretime_market::ConfigRecord;
 use alloc::collections::btree_map::BTreeMap;
 use frame_support::{
 	assert_ok, derive_impl, ensure, ord_parameter_types, parameter_types,
@@ -45,7 +44,6 @@ frame_support::construct_runtime!(
 	pub enum Test
 	{
 		System: frame_system,
-		CoretimeMarket: pallet_coretime_market,
 		Broker: crate,
 	}
 );
@@ -203,33 +201,6 @@ impl MaybeConvert<TaskId, u64> for SovereignAccountOf {
 	}
 }
 
-pub struct MarketCoreCountProvider;
-impl CoreCountProvider for MarketCoreCountProvider {
-	fn reserved_core_count() -> CoreIndex {
-		Reservations::<Test>::decode_len().unwrap_or_default() as CoreIndex +
-			Leases::<Test>::decode_len().unwrap_or_default() as CoreIndex
-	}
-}
-
-pub struct NoRenewalRights;
-impl RenewalRightsProvider<u64> for NoRenewalRights {
-	fn renewal_rights_count(_who: &u64, _when: Timeslice) -> u32 {
-		0
-	}
-}
-
-impl pallet_coretime_market::Config for Test {
-	type Balance = BalanceOf<Self>;
-	type RelayBlockNumber = RelayBlockNumberOf<Self>;
-	type WeightInfo = ();
-	type PriceAdapter = CenterTargetPrice<BalanceOf<Self>>;
-	type CoreCountProvider = MarketCoreCountProvider;
-	type RenewalRights = NoRenewalRights;
-	type TimeslicePeriod = ConstU64<2>;
-	type MaxBids = ConstU32<100>;
-	type PriceMultiplier = ConstU32<1>;
-}
-
 impl crate::Config for Test {
 	type RuntimeEvent = RuntimeEvent;
 	type Currency =
@@ -246,7 +217,7 @@ impl crate::Config for Test {
 	type AdminOrigin = EnsureOneOrRoot;
 	type SovereignAccountOf = SovereignAccountOf;
 	type MaxAutoRenewals = ConstU32<3>;
-	type Market = CoretimeMarket;
+	type Market = Broker;
 	type MinimumCreditPurchase = MinimumCreditPurchase;
 }
 
@@ -265,24 +236,6 @@ pub fn advance_sale_period() {
 		sale.region_begin as u64 * <<Test as crate::Config>::TimeslicePeriod as Get<u64>>::get();
 
 	advance_to(target_block_number)
-}
-
-/// Advance past the market + renewal phases to trigger settlement and finalization.
-/// After this call, all auction bids have been settled and regions have been issued.
-pub fn settle_market() {
-	let sale = Broker::market_sale_info().unwrap();
-	let config = Broker::market_configuration().unwrap();
-	let finalize_at = sale.sale_start + config.market_period + config.renewal_period;
-	advance_to(finalize_at);
-}
-
-/// Advance to the Renewal phase of the current sale.
-/// After this call, `do_renew` will get an immediate `Sold` result.
-pub fn advance_to_renewal_phase() {
-	let sale = Broker::market_sale_info().unwrap();
-	let config = Broker::market_configuration().unwrap();
-	let market_end = sale.sale_start + config.market_period;
-	advance_to(market_end);
 }
 
 pub fn pot() -> u64 {
@@ -318,14 +271,14 @@ pub fn attribute<T: codec::Decode>(nft: RegionId, attribute: impl codec::Encode)
 }
 
 pub fn new_config() -> ConfigRecordOf<Test> {
-	ConfigRecord {
+	market::ConfigRecord {
 		advance_notice: 2,
-		market_period: 3,
-		renewal_period: 1,
+		interlude_length: 1,
+		leadin_length: 1,
 		ideal_bulk_proportion: Default::default(),
 		limit_cores_offered: None,
 		region_length: 3,
-		penalty: Perbill::from_percent(10),
+		renewal_bump: Perbill::from_percent(10),
 		contribution_timeout: 5,
 	}
 }
@@ -350,13 +303,13 @@ impl TestExt {
 		self
 	}
 
-	pub fn market_period(mut self, market_period: u64) -> Self {
-		self.0.market_period = market_period;
+	pub fn interlude_length(mut self, interlude_length: u64) -> Self {
+		self.0.interlude_length = interlude_length;
 		self
 	}
 
-	pub fn renewal_period(mut self, renewal_period: u64) -> Self {
-		self.0.renewal_period = renewal_period;
+	pub fn leadin_length(mut self, leadin_length: u64) -> Self {
+		self.0.leadin_length = leadin_length;
 		self
 	}
 
@@ -375,8 +328,8 @@ impl TestExt {
 		self
 	}
 
-	pub fn penalty(mut self, penalty: Perbill) -> Self {
-		self.0.penalty = penalty;
+	pub fn renewal_bump(mut self, renewal_bump: Perbill) -> Self {
+		self.0.renewal_bump = renewal_bump;
 		self
 	}
 

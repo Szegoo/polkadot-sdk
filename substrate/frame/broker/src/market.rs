@@ -37,15 +37,11 @@ use crate::{
 };
 use alloc::vec::Vec;
 
-/// Legacy configuration record (pre-RFC-17).
-///
-/// This has `interlude_length`, `leadin_length`, and `renewal_bump` fields which are
-/// specific to the original broker sale model. The RFC-17 market replaces these with
-/// `market_period`, `renewal_period`, and `penalty`.
+/// Configuration of the coretime system for the legacy broker market.
 #[derive(
 	Encode, Decode, DecodeWithMemTracking, Clone, PartialEq, Eq, Debug, TypeInfo, MaxEncodedLen,
 )]
-pub struct LegacyConfigRecord<BlockNumber> {
+pub struct ConfigRecord<BlockNumber> {
 	/// The number of Relay-chain blocks in advance which scheduling should be fixed and the
 	/// `Coretime::assign` API used to inform the Relay-chain.
 	pub advance_notice: BlockNumber,
@@ -66,7 +62,7 @@ pub struct LegacyConfigRecord<BlockNumber> {
 	pub contribution_timeout: Timeslice,
 }
 
-impl<BlockNumber> LegacyConfigRecord<BlockNumber>
+impl<BlockNumber> ConfigRecord<BlockNumber>
 where
 	BlockNumber: sp_arithmetic::traits::Zero,
 {
@@ -78,7 +74,7 @@ where
 	}
 }
 
-impl<BlockNumber: Clone> MarketConfig for LegacyConfigRecord<BlockNumber>
+impl<BlockNumber: Clone> MarketConfig for ConfigRecord<BlockNumber>
 where
 	BlockNumber: sp_arithmetic::traits::Zero,
 {
@@ -94,19 +90,15 @@ where
 		self.contribution_timeout
 	}
 	fn validate(&self) -> Result<(), ()> {
-		LegacyConfigRecord::validate(self)
+		ConfigRecord::validate(self)
 	}
 }
 
-/// Legacy sale info record (pre-RFC-17).
-///
-/// This has `leadin_length`, `end_price`, and `sellout_price` fields which are specific to the
-/// original broker sale model. The RFC-17 market replaces these with `opening_price`,
-/// `reserve_price`, and `clearing_price`.
+/// The status of a Bulk Coretime Sale for the legacy broker market.
 #[derive(
 	Encode, Decode, DecodeWithMemTracking, Clone, PartialEq, Eq, Debug, TypeInfo, MaxEncodedLen,
 )]
-pub struct LegacySaleInfoRecord<Balance, BlockNumber> {
+pub struct SaleInfoRecord<Balance, BlockNumber> {
 	/// The relay block number at which the sale will/did start.
 	pub sale_start: BlockNumber,
 	/// The length in blocks of the Leadin Period (where the price is decreasing).
@@ -135,7 +127,7 @@ pub struct LegacySaleInfoRecord<Balance, BlockNumber> {
 }
 
 impl<Balance: Clone, BlockNumber: Clone> MarketSaleInfo
-	for LegacySaleInfoRecord<Balance, BlockNumber>
+	for SaleInfoRecord<Balance, BlockNumber>
 {
 	type Balance = Balance;
 	type BlockNumber = BlockNumber;
@@ -164,23 +156,23 @@ impl<Balance: Clone, BlockNumber: Clone> MarketSaleInfo
 }
 
 /// Concrete config type for the legacy market.
-type LegacyConfigRecordOf<T> = LegacyConfigRecord<RelayBlockNumberOf<T>>;
+pub type ConfigRecordOf<T> = ConfigRecord<RelayBlockNumberOf<T>>;
 /// Concrete sale info type for the legacy market.
-type LegacySaleInfoRecordOf<T> = LegacySaleInfoRecord<BalanceOf<T>, RelayBlockNumberOf<T>>;
+pub type SaleInfoRecordOf<T> = SaleInfoRecord<BalanceOf<T>, RelayBlockNumberOf<T>>;
 
 // Storage items for the legacy market. These use `#[storage_alias]` so they don't appear
 // in the broker pallet's metadata — they're only used when `type Market = Pallet<Runtime>`.
 
 #[storage_alias]
-type Configuration<T: Config> =
-	StorageValue<Pallet<T>, LegacyConfigRecordOf<T>, frame_support::pallet_prelude::OptionQuery>;
+pub(crate) type Configuration<T: Config> =
+	StorageValue<Pallet<T>, ConfigRecordOf<T>, frame_support::pallet_prelude::OptionQuery>;
 
 #[storage_alias]
-type SaleInfo<T: Config> =
-	StorageValue<Pallet<T>, LegacySaleInfoRecordOf<T>, frame_support::pallet_prelude::OptionQuery>;
+pub(crate) type SaleInfo<T: Config> =
+	StorageValue<Pallet<T>, SaleInfoRecordOf<T>, frame_support::pallet_prelude::OptionQuery>;
 
 #[storage_alias]
-type Status<T: Config> =
+pub(crate) type Status<T: Config> =
 	StorageValue<Pallet<T>, StatusRecord, frame_support::pallet_prelude::OptionQuery>;
 
 /// Type alias for TickAction with concrete pallet types.
@@ -188,7 +180,7 @@ pub(crate) type TickActionOf<T> = TickAction<
 	BalanceOf<T>,
 	<T as frame_system::Config>::AccountId,
 	(),
-	LegacySaleInfoRecordOf<T>,
+	SaleInfoRecordOf<T>,
 >;
 
 /// Provides the reserved core count from the broker's own storage.
@@ -212,8 +204,8 @@ where
 	/// The legacy market has no bid tracking, so the BidId is `()`.
 	type BidId = ();
 	type CoreCount = BrokerCoreCountProvider<T>;
-	type Config = LegacyConfigRecord<RelayBlockNumberOf<T>>;
-	type SaleInfo = LegacySaleInfoRecord<BalanceOf<T>, RelayBlockNumberOf<T>>;
+	type Config = ConfigRecord<RelayBlockNumberOf<T>>;
+	type SaleInfo = SaleInfoRecord<BalanceOf<T>, RelayBlockNumberOf<T>>;
 
 	fn start_sales(
 		block_number: RelayBlockNumberOf<T>,
@@ -232,7 +224,7 @@ where
 		};
 
 		// Imaginary old sale for bootstrapping the first actual sale:
-		let old_sale = LegacySaleInfoRecord {
+		let old_sale = SaleInfoRecord {
 			sale_start: block_number,
 			leadin_length: Zero::zero(),
 			end_price,
@@ -335,34 +327,28 @@ where
 		block_number: RelayBlockNumberOf<T>,
 		_weight_meter: &mut WeightMeter,
 	) -> Vec<TickActionOf<T>> {
-		let (Some(config), Some(mut status)) = (Configuration::<T>::get(), Status::<T>::get())
-		else {
+		let Some(config) = Configuration::<T>::get() else {
+			return alloc::vec![];
+		};
+		let Some(status) = Status::<T>::get() else {
+			return alloc::vec![];
+		};
+		let Some(sale) = SaleInfo::<T>::get() else {
 			return alloc::vec![];
 		};
 
 		let mut actions = alloc::vec![];
 
-		if let Some(commit_timeslice) =
-			next_timeslice_to_commit::<T>(block_number, &config, &status)
-		{
-			status.last_committed_timeslice = commit_timeslice;
+		// Check if the committed timeslice has reached the sale's region_begin,
+		// indicating the sale period has ended and we need to rotate.
+		// Note: The broker's do_tick() is responsible for advancing
+		// last_committed_timeslice and last_timeslice in status.
+		if status.last_committed_timeslice >= sale.region_begin {
+			// Process renewals against the current sale before rotating.
+			actions.push(TickAction::ProcessRenewals);
 
-			if let Some(sale) = SaleInfo::<T>::get() {
-				if commit_timeslice >= sale.region_begin {
-					// Process renewals against the current sale before rotating.
-					actions.push(TickAction::ProcessRenewals);
-
-					sale_rotated::<T>(sale, &config, &status, block_number, &mut actions);
-				}
-			}
+			sale_rotated::<T>(sale, &config, &status, block_number, &mut actions);
 		}
-
-		let current_timeslice = current_timeslice::<T>(block_number);
-		if status.last_timeslice < current_timeslice {
-			status.last_timeslice.saturating_inc();
-		}
-
-		Status::<T>::put(status);
 
 		actions
 	}
@@ -372,11 +358,11 @@ impl<T: Config> MarketState for Pallet<T>
 where
 	BalanceOf<T>: FixedPointOperand,
 {
-	fn configuration() -> Option<LegacyConfigRecordOf<T>> {
+	fn configuration() -> Option<ConfigRecordOf<T>> {
 		Configuration::<T>::get()
 	}
 
-	fn set_configuration(config: LegacyConfigRecordOf<T>) {
+	fn set_configuration(config: ConfigRecordOf<T>) {
 		Configuration::<T>::put(config);
 	}
 
@@ -388,11 +374,11 @@ where
 		Status::<T>::put(status);
 	}
 
-	fn sale_info() -> Option<LegacySaleInfoRecordOf<T>> {
+	fn sale_info() -> Option<SaleInfoRecordOf<T>> {
 		SaleInfo::<T>::get()
 	}
 
-	fn set_sale_info(sale_info: LegacySaleInfoRecordOf<T>) {
+	fn set_sale_info(sale_info: SaleInfoRecordOf<T>) {
 		SaleInfo::<T>::put(sale_info);
 	}
 
@@ -403,7 +389,7 @@ where
 
 	#[cfg(feature = "runtime-benchmarks")]
 	fn benchmark_config() -> Self::Config {
-		LegacyConfigRecord {
+		ConfigRecord {
 			advance_notice: 2u32.into(),
 			interlude_length: 1u32.into(),
 			leadin_length: 1u32.into(),
@@ -417,8 +403,8 @@ where
 }
 
 pub(crate) fn sale_rotated<T: Config>(
-	sale: LegacySaleInfoRecordOf<T>,
-	config: &LegacyConfigRecordOf<T>,
+	sale: SaleInfoRecordOf<T>,
+	config: &ConfigRecordOf<T>,
 	status: &StatusRecord,
 	block_number: RelayBlockNumberOf<T>,
 	actions: &mut Vec<TickActionOf<T>>,
@@ -436,7 +422,7 @@ pub(crate) fn sale_rotated<T: Config>(
 
 fn purchase_core<T: Config>(
 	price: BalanceOf<T>,
-	sale: &mut LegacySaleInfoRecordOf<T>,
+	sale: &mut SaleInfoRecordOf<T>,
 ) -> CoreIndex {
 	let core = sale.first_core.saturating_add(sale.cores_sold);
 	sale.cores_sold.saturating_inc();
@@ -448,7 +434,7 @@ fn purchase_core<T: Config>(
 
 pub(crate) fn sell_price<T: Config>(
 	now: RelayBlockNumberOf<T>,
-	sale: &LegacySaleInfoRecordOf<T>,
+	sale: &SaleInfoRecordOf<T>,
 ) -> BalanceOf<T>
 where
 	BalanceOf<T>: FixedPointOperand,
@@ -471,21 +457,9 @@ fn current_timeslice<T: Config>(now: RelayBlockNumberOf<T>) -> Timeslice {
 	(now / timeslice_period).saturated_into()
 }
 
-fn next_timeslice_to_commit<T: Config>(
-	now: RelayBlockNumberOf<T>,
-	config: &LegacyConfigRecordOf<T>,
-	status: &StatusRecord,
-) -> Option<Timeslice> {
-	if status.last_committed_timeslice < latest_timeslice_ready_to_commit::<T>(now, config) {
-		Some(status.last_committed_timeslice + 1)
-	} else {
-		None
-	}
-}
-
 fn latest_timeslice_ready_to_commit<T: Config>(
 	now: RelayBlockNumberOf<T>,
-	config: &LegacyConfigRecordOf<T>,
+	config: &ConfigRecordOf<T>,
 ) -> Timeslice {
 	let advanced = now.saturating_add(config.advance_notice);
 	let timeslice_period = T::TimeslicePeriod::get();
@@ -493,7 +467,7 @@ fn latest_timeslice_ready_to_commit<T: Config>(
 }
 
 fn adapt_prices<T: Config>(
-	old_sale: &LegacySaleInfoRecordOf<T>,
+	old_sale: &SaleInfoRecordOf<T>,
 ) -> AdaptedPrices<BalanceOf<T>>
 where
 	BalanceOf<T>: FixedPointOperand,
@@ -509,12 +483,12 @@ where
 }
 
 pub(crate) fn rotate_sale<T: Config>(
-	old_sale: &LegacySaleInfoRecordOf<T>,
-	config: &LegacyConfigRecordOf<T>,
+	old_sale: &SaleInfoRecordOf<T>,
+	config: &ConfigRecordOf<T>,
 	status: &StatusRecord,
 	reserved_cores: CoreIndex,
 	now: RelayBlockNumberOf<T>,
-) -> (AdaptedPrices<BalanceOf<T>>, LegacySaleInfoRecordOf<T>)
+) -> (AdaptedPrices<BalanceOf<T>>, SaleInfoRecordOf<T>)
 where
 	BalanceOf<T>: FixedPointOperand,
 {
@@ -536,7 +510,7 @@ where
 	let region_begin = old_sale.region_end;
 	let region_end = region_begin + config.region_length;
 
-	let new_sale = LegacySaleInfoRecord {
+	let new_sale = SaleInfoRecord {
 		sale_start,
 		leadin_length,
 		end_price: new_prices.reserve_price,

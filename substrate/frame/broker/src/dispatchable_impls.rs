@@ -234,6 +234,7 @@ impl<T: Config> Pallet<T> {
 		Ok(())
 	}
 
+	#[allow(dead_code)]
 	pub(crate) fn do_close_bid(
 		id: BidIdOf<T>,
 		maybe_check_owner: Option<T::AccountId>,
@@ -583,23 +584,15 @@ impl<T: Config> Pallet<T> {
 	) -> DispatchResult {
 		let sale = Self::market_sale_info().ok_or(Error::<T>::NoSales)?;
 		let mut core = core;
-		let mut deferred_renewal = false;
 
-		// Check if the core is expiring in the next bulk period; if so, we will renew it now
-		// if we're in the Renewal phase.
+		// Check if the core is expiring in the next bulk period; if so, we will renew it now.
 		if PotentialRenewals::<T>::get(PotentialRenewalId { core, when: sale.region_begin() })
 			.is_some()
 		{
-			match Self::do_renew(sovereign_account.clone(), core) {
-				Ok(DoRenewResult::Renewed { new_core }) => {
-					core = new_core;
-				},
-				Err(_) => {
-					// During Market phase, do_renew fails (WrongPhase). Defer the
-					// renewal to renew_cores which runs when Renewal phase starts.
-					deferred_renewal = true;
-				},
-			}
+			let DoRenewResult::Renewed { new_core } =
+				Self::do_renew(sovereign_account.clone(), core)?;
+
+			core = new_core;
 		} else if let Some(workload_end) = workload_end_hint {
 			ensure!(
 				PotentialRenewals::<T>::get(PotentialRenewalId { core, when: workload_end })
@@ -610,14 +603,6 @@ impl<T: Config> Pallet<T> {
 			return Err(Error::<T>::NotAllowed.into());
 		}
 
-		// When the renewal was deferred (bid closed during Market phase), use
-		// region_begin so that renew_cores picks it up during this sale's Renewal phase.
-		let next_renewal = if deferred_renewal {
-			sale.region_begin()
-		} else {
-			workload_end_hint.unwrap_or(sale.region_end())
-		};
-
 		// We are sorting auto renewals by `CoreIndex`.
 		AutoRenewals::<T>::try_mutate(|renewals| {
 			let pos = renewals
@@ -625,7 +610,11 @@ impl<T: Config> Pallet<T> {
 				.unwrap_or_else(|e| e);
 			renewals.try_insert(
 				pos,
-				AutoRenewalRecord { core, task, next_renewal },
+				AutoRenewalRecord {
+					core,
+					task,
+					next_renewal: workload_end_hint.unwrap_or(sale.region_end()),
+				},
 			)
 		})
 		.map_err(|_| Error::<T>::TooManyAutoRenewals)?;
