@@ -918,6 +918,56 @@ fn descending_price<T: Config>(
 	sale.opening_price.saturating_sub(descent)
 }
 
+/// Fisher-Yates shuffle of the sub-slice of bids that tie at the clearing price.
+///
+/// RFC-17 specifies random selection at the marginal step using the parent block hash as
+/// entropy. After the initial sort by price descending, bids strictly above the clearing
+/// price are already guaranteed winners and bids strictly below are guaranteed losers. Only
+/// the bids exactly at `clearing_price` need to be shuffled so that winners among them are
+/// chosen fairly.
+fn shuffle_marginal_bids<T: Config>(
+	bids: &mut [(u32, BidRecord<T::AccountId, BalanceOf<T>>)],
+	clearing_price: BalanceOf<T>,
+) {
+	// Find the contiguous range of bids at the clearing price using binary search.
+	// After the descending sort: [above, above, ..., AT, AT, AT, ..., below, below, ...]
+	// partition_point finds the first element where the predicate is false.
+	let start = bids.partition_point(|b| b.1.price > clearing_price);
+	let end = bids.partition_point(|b| b.1.price >= clearing_price);
+
+	if end.saturating_sub(start) <= 1 {
+		// Zero or one bid at the clearing price — nothing to shuffle.
+		return;
+	}
+
+	let slice = &mut bids[start..end];
+	let n = slice.len();
+
+	// Use parent block hash as entropy source for the shuffle.
+	let seed = frame_system::Pallet::<T>::parent_hash();
+	let seed_bytes: &[u8] = seed.as_ref();
+
+	// Fisher-Yates shuffle (Durstenfeld variant): iterate from the end, swap each element
+	// with a randomly chosen element from the remaining unshuffled portion.
+	//
+	// Each step consumes 4 bytes from the hash to produce a random index, wrapping around
+	// if there are more steps than the hash can cover.
+	let hash_len = seed_bytes.len().saturating_sub(3);
+	if hash_len == 0 {
+		return;
+	}
+	for i in (1..n).rev() {
+		let offset = ((i - 1) * 4) % hash_len;
+		let rand_val = u32::from_le_bytes(
+			seed_bytes[offset..offset + 4]
+				.try_into()
+				.expect("offset + 4 is within bounds; qed"),
+		);
+		let j = (rand_val as usize) % (i + 1);
+		slice.swap(i, j);
+	}
+}
+
 /// Settle the auction at the end of the Market phase.
 ///
 /// Sorts all bids by price descending, determines the clearing price (Kth highest bid,
@@ -942,6 +992,11 @@ fn settle_auction<T: Config>(sale: &SaleInfoRecordOf<T>) -> Vec<TickActionOf<T>>
 	} else {
 		reserve
 	};
+
+	// RFC-17: Randomly shuffle bids that tie at the clearing price using the parent block
+	// hash as entropy. This ensures fair selection when not all bids at the marginal price
+	// can win.
+	shuffle_marginal_bids::<T>(&mut all_bids, clearing_price);
 
 	AuctionClearingPrice::<T>::put(clearing_price);
 
