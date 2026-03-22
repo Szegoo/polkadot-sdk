@@ -509,9 +509,9 @@ fn renewal_displacement_protects_renewers_with_rights() {
 
 		let allocations = crate::Allocations::<Test>::get();
 		let bidder_10 = allocations.iter().find(|a| a.who == 10).unwrap();
-		assert!(bidder_10.has_renewal_rights);
+		assert!(bidder_10.renewal_rights > 0);
 		let bidder_20 = allocations.iter().find(|a| a.who == 20).unwrap();
-		assert!(!bidder_20.has_renewal_rights);
+		assert_eq!(bidder_20.renewal_rights, 0);
 
 		let result = place_renewal(market_end + 1, 30, 0, sale.region_begin, 100);
 		assert!(result.is_ok());
@@ -895,14 +895,8 @@ fn sale_rotation_cleans_up_previous_state() {
 #[test]
 fn full_sale_lifecycle() {
 	let config = ConfigRecord {
-		advance_notice: 2,
 		market_period: 100,
-		renewal_period: 10,
-		ideal_bulk_proportion: Perbill::from_percent(100),
-		limit_cores_offered: None,
-		region_length: 3,
-		penalty: Perbill::from_percent(30),
-		contribution_timeout: 5,
+		..new_config()
 	};
 	TestExt::new_with_config(config.clone()).execute_with(|| {
 		start_sales(100, 2);

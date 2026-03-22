@@ -19,8 +19,8 @@
 
 use crate::*;
 use frame_support::derive_impl;
-use sp_core::{ConstU32, ConstU64};
-use sp_coretime::{CenterTargetPrice, CoreCountProvider, CoreIndex, RenewalRightsProvider};
+use sp_core::ConstU32;
+use sp_coretime::{CoreCountProvider, CoreIndex, RenewalRightsProvider};
 use sp_runtime::BuildStorage;
 
 type Block = frame_system::mocking::MockBlock<Test>;
@@ -71,15 +71,13 @@ impl crate::pallet::Config for Test {
 	type Balance = u64;
 	type RelayBlockNumber = u64;
 	type WeightInfo = ();
-	type PriceAdapter = CenterTargetPrice<u64>;
 	type CoreCountProvider = TestCoreCountProvider;
 	type RenewalRights = TestRenewalRights;
-	type TimeslicePeriod = ConstU64<2>;
+	type TimeslicePeriod = sp_core::ConstU64<2>;
 	type MaxBids = ConstU32<100>;
-	type PriceMultiplier = ConstU32<2>;
 }
 
-pub fn new_config() -> ConfigRecord<u64> {
+pub fn new_config() -> ConfigRecord<u64, u64> {
 	ConfigRecord {
 		advance_notice: 2,
 		market_period: 20,
@@ -89,6 +87,12 @@ pub fn new_config() -> ConfigRecord<u64> {
 		region_length: 3,
 		penalty: sp_arithmetic::Perbill::from_percent(30),
 		contribution_timeout: 5,
+		price_multiplier: 2,
+		min_opening_price: 10,
+		target_consumption_rate: sp_arithmetic::Perbill::from_percent(90),
+		sensitivity_millis: 2500, // K = 2.5
+		min_reserve_price: 1,
+		min_increment: 100,
 	}
 }
 
@@ -97,14 +101,14 @@ pub fn new_test_ext() -> sp_io::TestExternalities {
 	sp_io::TestExternalities::from(c)
 }
 
-pub struct TestExt(ConfigRecord<u64>);
+pub struct TestExt(ConfigRecord<u64, u64>);
 #[allow(dead_code)]
 impl TestExt {
 	pub fn new() -> Self {
 		Self(new_config())
 	}
 
-	pub fn new_with_config(config: ConfigRecord<u64>) -> Self {
+	pub fn new_with_config(config: ConfigRecord<u64, u64>) -> Self {
 		Self(config)
 	}
 

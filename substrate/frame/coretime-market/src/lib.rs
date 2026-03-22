@@ -69,10 +69,10 @@ use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
 use scale_info::TypeInfo;
 use sp_arithmetic::Perbill;
 use sp_coretime::{
-	AdaptPrice, AdaptedPrices, CloseBidResult, CoreCountProvider, CoreIndex, CoreMask,
-	DisplacedBid, Market, MarketConfig, MarketError, MarketSaleInfo, MarketState, OrderResult,
-	PotentialRenewalId, RegionId, RenewalOrderResult, RenewalRightsProvider, SalePerformance,
-	SalesStarted, StatusRecord, TickAction, Timeslice,
+	AdaptedPrices, CloseBidResult, CoreCountProvider, CoreIndex, CoreMask, DisplacedBid, Market,
+	MarketConfig, MarketError, MarketSaleInfo, MarketState, OrderResult, PotentialRenewalId,
+	RegionId, RenewalOrderResult, RenewalRightsProvider, SalesStarted, StatusRecord, TickAction,
+	Timeslice,
 };
 use sp_runtime::{
 	traits::{AtLeast32BitUnsigned, SaturatedConversion, Saturating, Zero},
@@ -137,10 +137,13 @@ impl<Balance: Clone, BlockNumber: Clone> MarketSaleInfo for SaleInfoRecord<Balan
 }
 
 /// Configuration of the coretime system (RFC-17 model).
+///
+/// All governance-adjustable parameters from RFC-17 are stored here so they can be
+/// updated at runtime via `set_configuration`.
 #[derive(
 	Encode, Decode, DecodeWithMemTracking, Clone, PartialEq, Eq, Debug, TypeInfo, MaxEncodedLen,
 )]
-pub struct ConfigRecord<BlockNumber> {
+pub struct ConfigRecord<BlockNumber, Balance> {
 	/// The number of Relay-chain blocks in advance which scheduling should be fixed and the
 	/// `Coretime::assign` API used to inform the Relay-chain.
 	pub advance_notice: BlockNumber,
@@ -156,12 +159,27 @@ pub struct ConfigRecord<BlockNumber> {
 	/// no more cores will be sold than this.
 	pub limit_cores_offered: Option<CoreIndex>,
 	/// Penalty applied to renewers who didn't win in the auction (when market is oversubscribed).
+	/// RFC-17: e.g. 30%.
 	pub penalty: Perbill,
 	/// The duration by which rewards for contributions to the InstaPool must be collected.
 	pub contribution_timeout: Timeslice,
+	/// Price multiplier for the opening price. RFC-17: recommended 3.
+	/// `opening_price = max(min_opening_price, price_multiplier * reserve_price)`.
+	pub price_multiplier: u32,
+	/// Minimum opening price floor. RFC-17: recommended 150 DOT.
+	pub min_opening_price: Balance,
+	/// Target consumption rate for reserve price adjustment. RFC-17: recommended 90%.
+	pub target_consumption_rate: Perbill,
+	/// Sensitivity parameter (K) in milliunits. Divide by 1000 to get the actual K value.
+	/// E.g. 2500 = K of 2.5. RFC-17: recommended 2000-3000 (i.e. K = 2-3).
+	pub sensitivity_millis: u32,
+	/// Minimum reserve price floor. RFC-17: recommended 1 DOT.
+	pub min_reserve_price: Balance,
+	/// Minimum absolute increment when consumption is 100%. RFC-17: recommended 100 DOT.
+	pub min_increment: Balance,
 }
 
-impl<BlockNumber> ConfigRecord<BlockNumber>
+impl<BlockNumber, Balance> ConfigRecord<BlockNumber, Balance>
 where
 	BlockNumber: sp_arithmetic::traits::Zero,
 {
@@ -175,7 +193,7 @@ where
 	}
 }
 
-impl<BlockNumber: Clone> MarketConfig for ConfigRecord<BlockNumber>
+impl<BlockNumber: Clone, Balance> MarketConfig for ConfigRecord<BlockNumber, Balance>
 where
 	BlockNumber: sp_arithmetic::traits::Zero,
 {
@@ -197,7 +215,7 @@ where
 
 type BalanceOf<T> = <T as pallet::Config>::Balance;
 type RelayBlockNumberOf<T> = <T as pallet::Config>::RelayBlockNumber;
-type ConfigRecordOf<T> = ConfigRecord<RelayBlockNumberOf<T>>;
+type ConfigRecordOf<T> = ConfigRecord<RelayBlockNumberOf<T>, BalanceOf<T>>;
 type SaleInfoRecordOf<T> = SaleInfoRecord<BalanceOf<T>, RelayBlockNumberOf<T>>;
 type TickActionOf<T> =
 	TickAction<BalanceOf<T>, <T as frame_system::Config>::AccountId, u32, SaleInfoRecordOf<T>>;
@@ -266,8 +284,9 @@ pub struct AllocationRecord<AccountId, Balance> {
 	pub bid_id: u32,
 	/// The core index assigned to this allocation.
 	pub core: CoreIndex,
-	/// Whether this winner holds renewal rights and is protected from displacement.
-	pub has_renewal_rights: bool,
+	/// Number of remaining renewal rights for this account. Allocations with 0 are
+	/// displaceable during the renewal phase.
+	pub renewal_rights: u32,
 }
 
 /// Weight functions needed by the market pallet.
@@ -332,9 +351,6 @@ pub mod pallet {
 		/// Weight information for market operations.
 		type WeightInfo: WeightInfo;
 
-		/// Price adaptation algorithm used when rotating sales.
-		type PriceAdapter: AdaptPrice<Self::Balance>;
-
 		/// Provider of the reserved core count (reservations + leases).
 		type CoreCountProvider: CoreCountProvider;
 
@@ -349,10 +365,6 @@ pub mod pallet {
 		#[pallet::constant]
 		type MaxBids: Get<u32>;
 
-		/// Price multiplier for the opening price of the descending auction.
-		/// Opening price = previous clearing price * multiplier.
-		#[pallet::constant]
-		type PriceMultiplier: Get<u32>;
 	}
 
 	#[pallet::event]
@@ -635,7 +647,7 @@ impl<T: Config> Market for Pallet<T> {
 					let displace_idx = allocs
 						.iter()
 						.enumerate()
-						.filter(|(_, a)| !a.has_renewal_rights)
+						.filter(|(_, a)| a.renewal_rights == 0)
 						.min_by_key(|(_, a)| a.bid_price)
 						.map(|(i, _)| i);
 
@@ -1014,10 +1026,17 @@ fn settle_auction<T: Config>(sale: &SaleInfoRecordOf<T>) -> Vec<TickActionOf<T>>
 					.push(TickAction::Refund { amount: excess, who: bid.who.clone() });
 			}
 
-			let has_renewal_rights =
-				T::RenewalRights::renewal_rights_count(&bid.who, sale.region_end) > 0;
-
 			let core = sale.first_core.saturating_add(i as u16);
+			// TODO: This is O(k²) over winners. Consider caching per-account counts if k
+			// grows large enough for this to matter.
+			let renewal_rights = T::RenewalRights::renewal_rights_count(
+				&bid.who,
+				sale.region_end,
+			)
+			.saturating_sub(
+				allocations.iter().filter(|a| a.who == bid.who && a.renewal_rights > 0).count()
+					as u32,
+			);
 
 			allocations.push(AllocationRecord {
 				who: bid.who,
@@ -1025,7 +1044,7 @@ fn settle_auction<T: Config>(sale: &SaleInfoRecordOf<T>) -> Vec<TickActionOf<T>>
 				bid_price: bid.price,
 				bid_id,
 				core,
-				has_renewal_rights,
+				renewal_rights,
 			});
 
 			winner_count += 1;
@@ -1091,15 +1110,74 @@ fn latest_timeslice_ready_to_commit<T: Config>(
 	(advanced / timeslice_period).saturated_into()
 }
 
-fn adapt_prices<T: Config>(old_sale: &SaleInfoRecordOf<T>) -> AdaptedPrices<BalanceOf<T>> {
-	let perf = SalePerformance {
-		clearing_price: old_sale.clearing_price,
-		reserve_price: old_sale.reserve_price,
-		ideal_cores_sold: old_sale.ideal_cores_sold,
-		cores_offered: old_sale.cores_offered,
-		cores_sold: old_sale.cores_sold,
+/// Compute the new reserve price per RFC-17's exponential adjustment:
+///
+/// `price_candidate = reserve_price * exp(K * (consumption_rate - TARGET))`
+/// `price_candidate = max(price_candidate, P_MIN)`
+/// If consumption == 100% and increase < MIN_INCREMENT: use reserve + MIN_INCREMENT instead.
+fn adjust_reserve_price<T: Config>(
+	old_sale: &SaleInfoRecordOf<T>,
+	config: &ConfigRecordOf<T>,
+) -> BalanceOf<T> {
+	let cores_offered = old_sale.cores_offered;
+	if cores_offered == 0 {
+		// Bootstrap: no previous sale data, keep the initial reserve price.
+		return old_sale.reserve_price;
+	}
+
+	// consumption_rate = cores_sold / cores_offered (including renewals).
+	let consumption_rate =
+		Perbill::from_rational(old_sale.cores_sold as u32, cores_offered as u32);
+	let target = config.target_consumption_rate;
+
+	let k = FixedU64::from_rational(config.sensitivity_millis as u128, 1000);
+
+	// (consumption_rate - target) can be negative; compute absolute value and sign.
+	let (deviation, positive) = if consumption_rate >= target {
+		(consumption_rate - target, true)
+	} else {
+		(target - consumption_rate, false)
 	};
-	T::PriceAdapter::adapt_price(perf)
+
+	// deviation as FixedU64 (Perbill is [0,1], convert via its inner value).
+	let dev = FixedU64::from_rational(deviation.deconstruct() as u128, 1_000_000_000);
+	let exponent = k.saturating_mul(dev);
+
+	// Compute exp(x) via Taylor series: sum(x^k / k!) for k = 0, 1, 2, ...
+	// Iterates until terms become negligible (< 1e-12 in FixedU64).
+	// For exp(-x), compute exp(x) and invert: exp(-x) = 1 / exp(x).
+	let x = exponent;
+	let mut sum = FixedU64::from(1);
+	let mut term = FixedU64::from(1);
+	for n in 1..20u64 {
+		term = term.saturating_mul(x) / FixedU64::saturating_from_integer(n);
+		if term.into_inner() == 0 {
+			break;
+		}
+		sum = sum.saturating_add(term);
+	}
+	let exp_approx = if positive {
+		sum
+	} else {
+		FixedU64::saturating_from_rational(FixedU64::from(1).into_inner(), sum.into_inner())
+	};
+
+	let mut price_candidate = exp_approx.saturating_mul_int(old_sale.reserve_price);
+
+	// Floor at P_MIN.
+	if price_candidate < config.min_reserve_price {
+		price_candidate = config.min_reserve_price;
+	}
+
+	// If 100% consumption and increase < MIN_INCREMENT, apply MIN_INCREMENT instead.
+	if consumption_rate == Perbill::one() {
+		let increase = price_candidate.saturating_sub(old_sale.reserve_price);
+		if increase < config.min_increment {
+			price_candidate = old_sale.reserve_price.saturating_add(config.min_increment);
+		}
+	}
+
+	price_candidate
 }
 
 /// Rotate to a new sale based on the previous sale's performance.
@@ -1110,7 +1188,11 @@ fn rotate_sale<T: Config>(
 	reserved_cores: CoreIndex,
 	now: RelayBlockNumberOf<T>,
 ) -> (AdaptedPrices<BalanceOf<T>>, SaleInfoRecordOf<T>) {
-	let new_prices = adapt_prices::<T>(old_sale);
+	let new_reserve = adjust_reserve_price::<T>(old_sale, config);
+	let new_prices = AdaptedPrices {
+		reserve_price: new_reserve,
+		target_price: old_sale.clearing_price.unwrap_or(new_reserve),
+	};
 
 	let max_possible_sales = status.core_count.saturating_sub(reserved_cores);
 	let limit_cores_offered = config.limit_cores_offered.unwrap_or(CoreIndex::max_value());
@@ -1120,10 +1202,11 @@ fn rotate_sale<T: Config>(
 	let region_begin = old_sale.region_end;
 	let region_end = region_begin + config.region_length;
 
-	// Opening price based on previous clearing price.
-	let previous_clearing = old_sale.clearing_price.unwrap_or(old_sale.reserve_price);
-	let opening_price =
-		previous_clearing.saturating_mul(T::PriceMultiplier::get().into());
+	// RFC-17: opening_price = max(min_opening_price, price_multiplier * reserve_price).
+	let opening_price = new_prices
+		.reserve_price
+		.saturating_mul(config.price_multiplier.into())
+		.max(config.min_opening_price);
 
 	let new_sale = SaleInfoRecord {
 		sale_start: now,
