@@ -353,9 +353,8 @@ fn winners_pay_clearing_price_not_bid_price() {
 
 		let allocations = crate::Allocations::<Test>::get();
 		assert_eq!(allocations.len(), 2);
-		for alloc in &allocations {
-			assert_eq!(alloc.clearing_price, price.max(sale.reserve_price));
-		}
+		let clearing = crate::AuctionClearingPrice::<Test>::get().unwrap();
+		assert_eq!(clearing, price.max(sale.reserve_price));
 	});
 }
 

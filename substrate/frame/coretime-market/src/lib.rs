@@ -30,8 +30,9 @@
 //!    auction winner. A penalty applies to renewers who did not participate in the auction
 //!    when the market was oversubscribed.
 //!
-//! 3. **Settlement Phase**: No primary sales occur. The sale rotates to a new cycle once
-//!    the relay chain has committed the timeslices covered by the current sale's regions.
+//! 3. **Settlement Phase**: No primary sales occur. The pallet waits until the next
+//!    sale's region begins before rotating into a new market cycle. Regions are issued
+//!    at the transition from Renewal to Settlement.
 //!
 //! ## Design
 //!
@@ -94,16 +95,15 @@ pub struct SaleInfoRecord<Balance, BlockNumber> {
 	pub clearing_price: Option<Balance>,
 	/// The first timeslice of the Regions which are being sold in this sale.
 	pub region_begin: Timeslice,
-	/// The timeslice on which the Regions which are being sold in the sale terminate. (i.e. One
-	/// after the last timeslice which the Regions control.)
+	/// The timeslice on which the Regions being sold in this sale expire.
 	pub region_end: Timeslice,
 	/// The number of cores we want to sell, ideally. Selling this amount would result in no
 	/// change to the price for the next sale.
 	pub ideal_cores_sold: CoreIndex,
-	/// Number of cores which are/have been offered for sale.
+	/// Number of cores offered for sale.
 	pub cores_offered: CoreIndex,
-	/// The index of the first core which is for sale. Core of Regions which are sold have
-	/// incrementing indices from this.
+	/// The index of the first core for sale. Sold regions are assigned core indices
+	/// incrementing from this value.
 	pub first_core: CoreIndex,
 	/// Number of cores which have been sold; never more than cores_offered.
 	pub cores_sold: CoreIndex,
@@ -163,8 +163,8 @@ pub struct ConfigRecord<BlockNumber, Balance> {
 	pub penalty: Perbill,
 	/// The duration by which rewards for contributions to the InstaPool must be collected.
 	pub contribution_timeout: Timeslice,
-	/// Price multiplier for the opening price. RFC-17: recommended 3.
-	/// `opening_price = max(min_opening_price, price_multiplier * reserve_price)`.
+	/// Multiplier applied to the reserve price to derive the opening price.
+	/// RFC-17: recommended 3.
 	pub price_multiplier: u32,
 	/// Minimum opening price floor. RFC-17: recommended 150 DOT.
 	pub min_opening_price: Balance,
@@ -175,7 +175,8 @@ pub struct ConfigRecord<BlockNumber, Balance> {
 	pub sensitivity_millis: u32,
 	/// Minimum reserve price floor. RFC-17: recommended 1 DOT.
 	pub min_reserve_price: Balance,
-	/// Minimum absolute increment when consumption is 100%. RFC-17: recommended 100 DOT.
+	/// Minimum absolute reserve price increase when consumption is 100%.
+	/// RFC-17: recommended 100 DOT.
 	pub min_increment: Balance,
 }
 
@@ -238,21 +239,21 @@ pub enum SalePhase {
 	Market,
 	/// Renewal period: existing tenants can exercise renewal rights.
 	Renewal,
-	/// Settlement period: secondary market trading only, no primary sales.
+	/// Settlement period: no primary sales, awaiting next sale rotation.
 	Settlement,
 }
 
 /// A bid in the descending clock auction.
 #[derive(
-	codec::Encode,
-	codec::Decode,
-	codec::DecodeWithMemTracking,
+	Encode,
+	Decode,
+	DecodeWithMemTracking,
 	Clone,
 	PartialEq,
 	Eq,
 	Debug,
-	scale_info::TypeInfo,
-	codec::MaxEncodedLen,
+	TypeInfo,
+	MaxEncodedLen,
 )]
 pub struct BidRecord<AccountId, Balance> {
 	/// The bidder's account.
@@ -263,21 +264,19 @@ pub struct BidRecord<AccountId, Balance> {
 
 /// Record of an auction winner after settlement.
 #[derive(
-	codec::Encode,
-	codec::Decode,
-	codec::DecodeWithMemTracking,
+	Encode,
+	Decode,
+	DecodeWithMemTracking,
 	Clone,
 	PartialEq,
 	Eq,
 	Debug,
-	scale_info::TypeInfo,
-	codec::MaxEncodedLen,
+	TypeInfo,
+	MaxEncodedLen,
 )]
 pub struct AllocationRecord<AccountId, Balance> {
 	/// The winning bidder.
 	pub who: AccountId,
-	/// The uniform clearing price charged to this winner.
-	pub clearing_price: Balance,
 	/// The original bid price (used for displacement priority — lowest bid displaced first).
 	pub bid_price: Balance,
 	/// The unique bid ID.
@@ -443,7 +442,7 @@ pub mod pallet {
 			region_end: Timeslice,
 			/// The number of cores we want to sell, ideally.
 			ideal_cores_sold: CoreIndex,
-			/// Number of cores which are/have been offered for sale.
+			/// Number of cores offered for sale.
 			cores_offered: CoreIndex,
 		},
 	}
@@ -661,9 +660,9 @@ impl<T: Config> Market for Pallet<T> {
 							mask: CoreMask::complete(),
 						};
 
-						// Displaced winner gets clearing_price refunded (excess was already
+						// Displaced winner gets clearing price refunded (excess was already
 						// refunded during settlement).
-						let refund = displaced_alloc.clearing_price;
+						let refund = sale.clearing_price.unwrap_or_default();
 
 						Self::deposit_event(Event::BidDisplaced {
 							who: displaced_alloc.who.clone(),
@@ -1040,7 +1039,6 @@ fn settle_auction<T: Config>(sale: &SaleInfoRecordOf<T>) -> Vec<TickActionOf<T>>
 
 			allocations.push(AllocationRecord {
 				who: bid.who,
-				clearing_price,
 				bid_price: bid.price,
 				bid_id,
 				core,
@@ -1075,6 +1073,7 @@ fn finalize_sale<T: Config>(sale: &SaleInfoRecordOf<T>) -> Vec<TickActionOf<T>> 
 	let mut actions = vec![];
 	let allocations = Allocations::<T>::take();
 	let count = allocations.len() as u32;
+	let clearing_price = sale.clearing_price.unwrap_or(sale.reserve_price);
 
 	for alloc in allocations.into_iter() {
 		let region_id = RegionId {
@@ -1085,7 +1084,7 @@ fn finalize_sale<T: Config>(sale: &SaleInfoRecordOf<T>) -> Vec<TickActionOf<T>> 
 
 		actions.push(TickAction::SellRegion {
 			owner: alloc.who,
-			paid: alloc.clearing_price,
+			paid: clearing_price,
 			region_id,
 			region_end: sale.region_end,
 		});
