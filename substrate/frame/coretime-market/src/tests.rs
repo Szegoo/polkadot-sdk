@@ -290,11 +290,8 @@ fn clearing_price_is_kth_highest_bid() {
 			.iter()
 			.any(|a| matches!(a, TickAction::Refund { amount, who } if *who == 1 && *amount == excess)));
 
-		// Bidder 2 (mid_bid) loses and gets full refund.
-		let excess = mid_bid - clearing;
-		assert!(actions
-			.iter()
-			.any(|a| matches!(a, TickAction::Refund { amount, who } if *who == 3 && *amount == low_bid)));
+		// Bidder 2 (mid_bid) wins at exactly the clearing price — no excess to refund.
+		assert!(!actions.iter().any(|a| matches!(a, TickAction::Refund { who, .. } if *who == 2)));
 
 		// Bidder 3 (low_bid < clearing) loses and gets full refund.
 		assert!(actions
@@ -926,11 +923,13 @@ fn full_sale_lifecycle() {
 		let allocations = crate::Allocations::<Test>::get();
 		assert_eq!(allocations.len(), 2);
 
+		// Bidder 1 wins with excess refund (bid1 - clearing), bidder 3 loses with full refund.
+		// Bidder 2 wins at exactly the clearing price — no refund.
 		let refund_count = settle_actions
 			.iter()
 			.filter(|a| matches!(a, TickAction::Refund { .. }))
 			.count();
-		assert!(refund_count >= 1);
+		assert_eq!(refund_count, 2);
 
 		// --- Renewal Phase: renewer displaces an auction winner ---
 		let result = place_renewal(market_end + 1, 100, 0, sale.region_begin, 500);

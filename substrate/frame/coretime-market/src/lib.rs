@@ -1149,7 +1149,7 @@ fn adjust_reserve_price<T: Config>(
 	let x = exponent;
 	let mut sum = FixedU64::from(1);
 	let mut term = FixedU64::from(1);
-	for n in 1..20u64 {
+	for n in 1..30u64 {
 		term = term.saturating_mul(x) / FixedU64::saturating_from_integer(n);
 		if term.into_inner() == 0 {
 			break;
