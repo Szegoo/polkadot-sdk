@@ -234,18 +234,7 @@ impl<T: Config> Pallet<T> {
 		Ok(())
 	}
 
-	#[allow(dead_code)]
-	pub(crate) fn do_close_bid(
-		id: BidIdOf<T>,
-		maybe_check_owner: Option<T::AccountId>,
-	) -> DispatchResult {
-		let result = T::Market::close_bid(id, maybe_check_owner).map_err(Into::into)?;
-		Self::refund(&result.owner, result.refund)?;
 
-		Self::deposit_event(Event::BidClosed { bid_id: id, owner: result.owner });
-
-		Ok(())
-	}
 
 	pub(crate) fn do_transfer(
 		region_id: RegionId,

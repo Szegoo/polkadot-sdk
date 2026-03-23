@@ -743,32 +743,6 @@ fn raise_bid_fails_during_renewal_phase() {
 }
 
 // ============================================================================
-// close_bid tests
-// ============================================================================
-
-#[test]
-fn close_bid_always_fails() {
-	TestExt::new().execute_with(|| {
-		start_sales(100, 2);
-
-		let sale = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
-		let block = sale.sale_start + 1;
-		let price = <CoretimeMarketImpl as MarketState>::current_price(block).unwrap();
-
-		let result = place_bid(block, 1, price).unwrap();
-		let bid_id = match result {
-			OrderResult::BidPlaced { id, .. } => id,
-			_ => panic!("Expected BidPlaced"),
-		};
-
-		assert!(matches!(
-			CoretimeMarketImpl::close_bid(bid_id, Some(1)),
-			Err(MarketError::BidNotCancellable)
-		));
-	});
-}
-
-// ============================================================================
 // Descending price tests
 // ============================================================================
 

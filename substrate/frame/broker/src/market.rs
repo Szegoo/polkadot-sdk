@@ -29,7 +29,7 @@ use sp_arithmetic::{FixedPointNumber, Perbill};
 use sp_runtime::{traits::Zero, FixedPointOperand, FixedU64, SaturatedConversion, Saturating};
 
 use crate::{
-	AdaptPrice, AdaptedPrices, BalanceOf, CenterTargetPrice, CloseBidResult, Config,
+	AdaptPrice, AdaptedPrices, BalanceOf, CenterTargetPrice, Config,
 	CoreCountProvider, CoreIndex, CoreMask, Leases, Market, MarketConfig, MarketError,
 	MarketSaleInfo, MarketState, OrderResult, Pallet, PotentialRenewalId, RegionId,
 	RelayBlockNumberOf, RenewalOrderResult, Reservations, SalePerformance,
@@ -313,13 +313,6 @@ where
 		_who: &Self::AccountId,
 		_new_price: BalanceOf<T>,
 	) -> Result<BalanceOf<T>, Self::Error> {
-		Err(MarketError::BidNotExist)
-	}
-
-	fn close_bid(
-		_id: Self::BidId,
-		_maybe_check_owner: Option<T::AccountId>,
-	) -> Result<CloseBidResult<T::AccountId, BalanceOf<T>>, Self::Error> {
 		Err(MarketError::BidNotExist)
 	}
 

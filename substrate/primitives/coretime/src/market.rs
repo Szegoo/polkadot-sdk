@@ -76,12 +76,12 @@ pub enum MarketError {
 	TooEarly,
 	Unavailable,
 	TooManyBids,
+	/// All offered cores have been sold.
+	SoldOut,
 	/// Operation not allowed in the current sale phase.
 	WrongPhase,
 	/// Bid price is above the current descending price.
 	BidTooHigh,
-	/// Bids cannot be lowered or cancelled.
-	BidNotCancellable,
 }
 
 impl From<MarketError> for DispatchError {
@@ -94,9 +94,9 @@ impl From<MarketError> for DispatchError {
 			MarketError::TooEarly => Self::Other("TooEarly"),
 			MarketError::Unavailable => Self::Other("Unavailable"),
 			MarketError::TooManyBids => Self::Other("TooManyBids"),
+			MarketError::SoldOut => Self::Other("SoldOut"),
 			MarketError::WrongPhase => Self::Other("WrongPhase"),
 			MarketError::BidTooHigh => Self::Other("BidTooHigh"),
-			MarketError::BidNotCancellable => Self::Other("BidNotCancellable"),
 		}
 	}
 }
@@ -132,12 +132,6 @@ pub enum RenewalOrderResult<Balance, BidId, AccountId> {
 		/// The broker should refund the displaced bidder.
 		displaced: Option<DisplacedBid<AccountId, Balance, BidId>>,
 	},
-}
-
-/// Result of closing a bid.
-pub struct CloseBidResult<AccountId, Balance> {
-	pub owner: AccountId,
-	pub refund: Balance,
 }
 
 /// Actions returned by `Market::tick` for the broker to process.
@@ -268,14 +262,6 @@ pub trait Market {
 		who: &Self::AccountId,
 		new_price: Self::Balance,
 	) -> Result<Self::Balance, Self::Error>;
-
-	/// Close the bid given its `BidId`.
-	///
-	/// In RFC-17, bids are binding and cannot be cancelled.
-	fn close_bid(
-		id: Self::BidId,
-		maybe_check_owner: Option<Self::AccountId>,
-	) -> Result<CloseBidResult<Self::AccountId, Self::Balance>, Self::Error>;
 
 	/// Logic that gets called in `on_initialize` hook.
 	fn tick(

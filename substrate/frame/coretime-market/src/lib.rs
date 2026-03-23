@@ -70,7 +70,7 @@ use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
 use scale_info::TypeInfo;
 use sp_arithmetic::Perbill;
 use sp_coretime::{
-	AdaptedPrices, CloseBidResult, CoreCountProvider, CoreIndex, CoreMask, DisplacedBid, Market,
+	AdaptedPrices, CoreCountProvider, CoreIndex, CoreMask, DisplacedBid, Market,
 	MarketConfig, MarketError, MarketSaleInfo, MarketState, OrderResult, PotentialRenewalId,
 	RegionId, RenewalOrderResult, RenewalRightsProvider, SalesStarted, StatusRecord, TickAction,
 	Timeslice,
@@ -735,14 +735,6 @@ impl<T: Config> Market for Pallet<T> {
 		});
 
 		Ok(additional)
-	}
-
-	fn close_bid(
-		_id: Self::BidId,
-		_maybe_check_owner: Option<T::AccountId>,
-	) -> Result<CloseBidResult<T::AccountId, BalanceOf<T>>, Self::Error> {
-		// RFC-17: bids are binding and cannot be cancelled.
-		Err(MarketError::BidNotCancellable)
 	}
 
 	fn tick(
