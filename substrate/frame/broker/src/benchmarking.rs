@@ -30,7 +30,6 @@ use frame_support::{
 	},
 };
 use frame_system::{Pallet as System, RawOrigin};
-
 use sp_core::Get;
 use sp_runtime::{
 	traits::{BlockNumberProvider, MaybeConvert},
@@ -283,6 +282,9 @@ mod benches {
 			T::Currency::minimum_balance().saturating_add(sale_data.start_price),
 		);
 
+		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
+		let current_price = T::Market::current_price(now).ok_or(BenchmarkError::Weightless)?;
+
 		#[extrinsic_call]
 		_(RawOrigin::Signed(caller.clone()), sale_data.start_price);
 
@@ -295,7 +297,7 @@ mod benches {
 					core: sale_data.first_core,
 					mask: CoreMask::complete(),
 				},
-				price: sale_data.start_price,
+				price: current_price,
 				duration: 3u32.into(),
 			}
 			.into(),
@@ -307,7 +309,7 @@ mod benches {
 	#[benchmark]
 	fn renew() -> Result<(), BenchmarkError> {
 		let sale_data = setup_and_start_sale::<T>()?;
-		let region_len = Broker::<T>::market_configuration().unwrap().region_length;
+		let region_len = Broker::<T>::market_configuration().unwrap().region_length();
 
 		advance_to::<T>(2);
 
@@ -629,7 +631,7 @@ mod benches {
 	fn drop_region() -> Result<(), BenchmarkError> {
 		let sale_data = setup_and_start_sale::<T>()?;
 		let core = sale_data.first_core;
-		let region_len = Broker::<T>::market_configuration().unwrap().region_length;
+		let region_len = Broker::<T>::market_configuration().unwrap().region_length();
 
 		advance_to::<T>(2);
 
@@ -664,7 +666,7 @@ mod benches {
 	fn drop_contribution() -> Result<(), BenchmarkError> {
 		let sale_data = setup_and_start_sale::<T>()?;
 		let core = sale_data.first_core;
-		let region_len = Broker::<T>::market_configuration().unwrap().region_length;
+		let region_len = Broker::<T>::market_configuration().unwrap().region_length();
 
 		advance_to::<T>(2);
 
@@ -704,7 +706,7 @@ mod benches {
 		setup_and_start_sale::<T>()?;
 		let when = 5u32.into();
 		let revenue = 10_000_000u32.into();
-		let region_len = Broker::<T>::market_configuration().unwrap().region_length;
+		let region_len = Broker::<T>::market_configuration().unwrap().region_length();
 
 		advance_to::<T>(
 			(T::TimeslicePeriod::get() * (region_len * 8).into()).try_into().ok().unwrap(),
@@ -734,7 +736,7 @@ mod benches {
 		let sale_data = setup_and_start_sale::<T>()?;
 		let core = sale_data.first_core;
 		let when = 5u32.into();
-		let region_len = Broker::<T>::market_configuration().unwrap().region_length;
+		let region_len = Broker::<T>::market_configuration().unwrap().region_length();
 
 		advance_to::<T>(
 			(T::TimeslicePeriod::get() * (region_len * 3).into()).try_into().ok().unwrap(),
@@ -1155,10 +1157,18 @@ mod benches {
 
 	#[benchmark]
 	fn process_tick_action_sell_region() {
+		use frame_support::traits::fungible::MutateHold;
+
 		let owner: T::AccountId = whitelisted_caller();
+		let paid = T::Currency::minimum_balance();
+		// The owner needs enough balance and a hold for `settle_held` to succeed.
+		T::Currency::set_balance(&owner, paid.saturating_add(paid));
+		T::Currency::hold(&HoldReason::CoretimeBid.into(), &owner, paid)
+			.expect("Should be able to hold");
+
 		let action = TickAction::SellRegion {
 			owner: owner.clone(),
-			paid: T::Currency::minimum_balance(),
+			paid,
 			region_id: RegionId { begin: 0, core: 0, mask: CoreMask::complete() },
 			region_end: 1,
 		};
@@ -1173,7 +1183,7 @@ mod benches {
 			Event::Purchased {
 				who: owner,
 				region_id: RegionId { begin: 0, core: 0, mask: CoreMask::complete() },
-				price: T::Currency::minimum_balance(),
+				price: paid,
 				duration: 1,
 			}
 			.into(),
@@ -1319,56 +1329,52 @@ mod benches {
 	}
 
 	#[benchmark]
-	fn process_tick_action_timeslice_commited(n: Linear<0, { MAX_CORE_COUNT.into() }>) {
+	fn process_pool() {
+		let when = 10u32.into();
 		let private_pool_size = 5u32.into();
 		let system_pool_size = 4u32.into();
 
 		let config = new_config_record::<T>();
 		let commit_timeslice = Broker::<T>::latest_timeslice_ready_to_commit(&config);
-		let status = StatusRecord {
-			core_count: n as u16,
+		let mut status = StatusRecord {
+			core_count: 5u16.into(),
 			private_pool_size,
 			system_pool_size,
 			last_committed_timeslice: commit_timeslice.saturating_sub(1),
 			last_timeslice: Broker::<T>::current_timeslice(),
 		};
 
-		let timeslice = status.last_committed_timeslice;
-
-		Broker::<T>::set_market_status(status.clone());
-
-		for core in 0..status.core_count {
-			Workplan::<T>::insert((timeslice, core), new_schedule());
+		#[block]
+		{
+			Broker::<T>::process_pool(when, &mut status);
 		}
 
-		let action = TickAction::TimesliceCommited { timeslice };
-		let mut meter = WeightMeter::new();
+		assert!(InstaPoolHistory::<T>::get(when).is_some());
+		assert_last_event::<T>(
+			Event::HistoryInitialized { when, private_pool_size, system_pool_size }.into(),
+		);
+	}
+
+	#[benchmark]
+	fn process_core_schedule() {
+		let timeslice = 10u32.into();
+		let core = 5u16.into();
+		let rc_begin = 1u32.into();
+
+		Workplan::<T>::insert((timeslice, core), new_schedule());
 
 		#[block]
 		{
-			Broker::<T>::process_tick_action(action, &mut meter);
+			Broker::<T>::process_core_schedule(timeslice, rc_begin, core);
 		}
 
-		assert!(InstaPoolHistory::<T>::get(timeslice).is_some());
-		assert_has_event::<T>(
-			Event::HistoryInitialized { when: timeslice, private_pool_size, system_pool_size }
-				.into(),
-		);
-
-		let timeslice_period = T::TimeslicePeriod::get();
-		let rc_begin = RelayBlockNumberOf::<T>::from(timeslice) * timeslice_period;
+		assert_eq!(Workload::<T>::get(core).len(), CORE_MASK_BITS);
 
 		let mut assignment: Vec<(CoreAssignment, PartsOf57600)> = vec![];
 		for i in 0..CORE_MASK_BITS {
 			assignment.push((CoreAssignment::Task(i.try_into().unwrap()), 57600));
 		}
-
-		for core in 0..status.core_count {
-			assert_eq!(Workload::<T>::get(core).len(), CORE_MASK_BITS);
-			assert_has_event::<T>(
-				Event::CoreAssigned { core, when: rc_begin, assignment: assignment.clone() }.into(),
-			);
-		}
+		assert_last_event::<T>(Event::CoreAssigned { core, when: rc_begin, assignment }.into());
 	}
 
 	#[benchmark]
