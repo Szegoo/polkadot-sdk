@@ -496,18 +496,13 @@ fn renewal_displacement_protects_renewers_with_rights() {
 		let block = sale.sale_start + 1;
 		let price = <CoretimeMarketImpl as MarketState>::current_price(block).unwrap();
 
-		TestRenewalRights::set(10, sale.region_end, 1);
+		// Bidder 10 has renewal rights for this sale period — protected from displacement.
+		TestRenewalRights::set(10, sale.region_begin, 1);
 
 		assert!(place_bid(block, 10, price).is_ok());
 		assert!(place_bid(block, 20, price).is_ok());
 
 		tick(market_end);
-
-		let allocations = crate::Allocations::<Test>::get();
-		let bidder_10 = allocations.iter().find(|a| a.who == 10).unwrap();
-		assert!(bidder_10.renewal_rights > 0);
-		let bidder_20 = allocations.iter().find(|a| a.who == 20).unwrap();
-		assert_eq!(bidder_20.renewal_rights, 0);
 
 		let result = place_renewal(market_end + 1, 30, 0, sale.region_begin, 100);
 		assert!(result.is_ok());
@@ -533,8 +528,8 @@ fn renewal_fails_when_all_winners_have_renewal_rights() {
 		let block = sale.sale_start + 1;
 		let price = <CoretimeMarketImpl as MarketState>::current_price(block).unwrap();
 
-		TestRenewalRights::set(10, sale.region_end, 1);
-		TestRenewalRights::set(20, sale.region_end, 1);
+		TestRenewalRights::set(10, sale.region_begin, 1);
+		TestRenewalRights::set(20, sale.region_begin, 1);
 
 		assert!(place_bid(block, 10, price).is_ok());
 		assert!(place_bid(block, 20, price).is_ok());
@@ -881,6 +876,124 @@ fn sale_rotation_cleans_up_previous_state() {
 		// After rotation, previous sale state is cleaned up.
 		assert!(crate::AuctionClearingPrice::<Test>::get().is_none());
 		assert_eq!(crate::NextBidId::<Test>::get(), 0);
+	});
+}
+
+// ============================================================================
+// Reserve price adjustment tests
+// ============================================================================
+
+/// Helper: advance through a full sale cycle (market → renewal → settlement → rotation).
+/// `num_bids` bids are placed at the current price. Returns the new sale info after rotation.
+fn run_sale_cycle(num_bids: u32) -> SaleInfoRecord<u64, u64> {
+	let sale = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
+	let config = <CoretimeMarketImpl as MarketState>::configuration().unwrap();
+
+	let block = sale.sale_start + 1;
+	let price = <CoretimeMarketImpl as MarketState>::current_price(block).unwrap();
+
+	for i in 0..num_bids {
+		assert!(place_bid(block, 1000 + i as u64, price).is_ok());
+	}
+
+	let market_end = sale.sale_start + config.market_period;
+	let renewal_end = market_end + config.renewal_period;
+
+	tick(market_end);
+	tick(renewal_end);
+
+	let mut status = <CoretimeMarketImpl as MarketState>::status().unwrap();
+	status.last_committed_timeslice = sale.region_begin;
+	<CoretimeMarketImpl as MarketState>::set_status(status);
+
+	tick(renewal_end + 1);
+
+	<CoretimeMarketImpl as MarketState>::sale_info().unwrap()
+}
+
+#[test]
+fn reserve_price_increases_when_consumption_above_target() {
+	TestExt::new().execute_with(|| {
+		start_sales(100, 2);
+
+		// Fill all 2 cores → 100% consumption, above 90% target.
+		// K=2.5, deviation=10%, exp(0.25)≈1.284, candidate=128.
+		// Increase=28 < min_increment=100, so min_increment applies: 100 + 100 = 200.
+		let sale2 = run_sale_cycle(2);
+		assert_eq!(sale2.reserve_price, 200);
+	});
+}
+
+#[test]
+fn reserve_price_decreases_when_consumption_below_target() {
+	TestExt::new().execute_with(|| {
+		start_sales(100, 3);
+
+		// Fill 1 of 3 cores → 33% consumption, below 90% target.
+		// K=2.5, deviation≈57%, exp(-1.425)≈0.2407, candidate=24.
+		let sale2 = run_sale_cycle(1);
+		assert_eq!(sale2.reserve_price, 24);
+	});
+}
+
+#[test]
+fn reserve_price_does_not_fall_below_min() {
+	TestExt::new().execute_with(|| {
+		// Start with a very low reserve price.
+		start_sales(2, 3);
+
+		let config = <CoretimeMarketImpl as MarketState>::configuration().unwrap();
+
+		// 0 bids → 0% consumption, exp(-2.25)≈0.1054, candidate=0 (truncated).
+		// Floor at min_reserve_price=1.
+		let sale2 = run_sale_cycle(0);
+		assert_eq!(sale2.reserve_price, config.min_reserve_price);
+	});
+}
+
+#[test]
+fn min_increment_applied_at_full_consumption() {
+	TestExt::new().execute_with(|| {
+		start_sales(100, 2);
+
+		// 100% consumption: exp(0.25)*100=128, increase=28 < min_increment=100.
+		// min_increment rule applies: 100 + 100 = 200.
+		let sale2 = run_sale_cycle(2);
+		assert_eq!(sale2.reserve_price, 200);
+
+		// Next cycle: exp(0.25)*200=256, increase=56 < min_increment=100.
+		// min_increment applies again: 200 + 100 = 300.
+		let sale3 = run_sale_cycle(2);
+		assert_eq!(sale3.reserve_price, 300);
+
+		// Next cycle: exp(0.25)*300=385, increase=85 < min_increment=100.
+		// min_increment applies: 300 + 100 = 400.
+		let sale4 = run_sale_cycle(2);
+		assert_eq!(sale4.reserve_price, 400);
+	});
+}
+
+#[test]
+fn reserve_price_adjusts_over_multiple_cycles() {
+	TestExt::new().execute_with(|| {
+		start_sales(100, 2);
+
+		// 3 cycles full consumption — price increases by min_increment each time.
+		let sale2 = run_sale_cycle(2);
+		assert_eq!(sale2.reserve_price, 200);
+		let sale3 = run_sale_cycle(2);
+		assert_eq!(sale3.reserve_price, 300);
+		let sale4 = run_sale_cycle(2);
+		assert_eq!(sale4.reserve_price, 400);
+
+		// 3 cycles with 0 consumption — price decreases via exp(-2.25).
+		// exp(-2.25)≈0.1054
+		let sale5 = run_sale_cycle(0);
+		assert_eq!(sale5.reserve_price, 42); // 400 * 0.1054 ≈ 42
+		let sale6 = run_sale_cycle(0);
+		assert_eq!(sale6.reserve_price, 4); // 42 * 0.1054 ≈ 4
+		let sale7 = run_sale_cycle(0);
+		assert_eq!(sale7.reserve_price, 1); // 4 * 0.1054 ≈ 0, floored to min=1
 	});
 }
 

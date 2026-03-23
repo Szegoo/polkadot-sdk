@@ -283,9 +283,6 @@ pub struct AllocationRecord<AccountId, Balance> {
 	pub bid_id: u32,
 	/// The core index assigned to this allocation.
 	pub core: CoreIndex,
-	/// Number of remaining renewal rights for this account. Allocations with 0 are
-	/// displaceable during the renewal phase.
-	pub renewal_rights: u32,
 }
 
 /// Weight functions needed by the market pallet.
@@ -643,12 +640,17 @@ impl<T: Config> Market for Pallet<T> {
 					})
 				} else if oversubscribed {
 					// All cores allocated — displace lowest non-renewer auction winner.
-					let mut allocs = Allocations::<T>::get();
+					let mut allocs = allocations;
 
 					let displace_idx = allocs
 						.iter()
 						.enumerate()
-						.filter(|(_, a)| a.renewal_rights == 0)
+						.filter(|(_, a)| {
+							T::RenewalRights::renewal_rights_count(
+								&a.who,
+								sale.region_begin,
+							) == 0
+						})
 						.min_by_key(|(_, a)| a.bid_price)
 						.map(|(i, _)| i);
 
@@ -1028,23 +1030,12 @@ fn settle_auction<T: Config>(sale: &SaleInfoRecordOf<T>) -> Vec<TickActionOf<T>>
 			}
 
 			let core = sale.first_core.saturating_add(i as u16);
-			// TODO: This is O(k²) over winners. Consider caching per-account counts if k
-			// grows large enough for this to matter.
-			let renewal_rights = T::RenewalRights::renewal_rights_count(
-				&bid.who,
-				sale.region_end,
-			)
-			.saturating_sub(
-				allocations.iter().filter(|a| a.who == bid.who && a.renewal_rights > 0).count()
-					as u32,
-			);
 
 			allocations.push(AllocationRecord {
 				who: bid.who,
 				bid_price: bid.price,
 				bid_id,
 				core,
-				renewal_rights,
 			});
 
 			winner_count += 1;
