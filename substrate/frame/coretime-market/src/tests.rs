@@ -248,7 +248,7 @@ fn place_bid_enforces_max_bids() {
 		// Next bid should fail — MaxBids reached.
 		assert!(matches!(
 			place_bid(block, 1, current_price),
-			Err(MarketError::SoldOut)
+			Err(MarketError::TooManyBids)
 		));
 	});
 }

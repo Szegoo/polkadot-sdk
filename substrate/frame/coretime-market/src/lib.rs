@@ -567,7 +567,7 @@ impl<T: Config> Market for Pallet<T> {
 		ensure!(block_number >= sale.sale_start, MarketError::TooEarly);
 
 		let bid_count = NextBidId::<T>::get();
-		ensure!(bid_count < T::MaxBids::get(), MarketError::SoldOut);
+		ensure!(bid_count < T::MaxBids::get(), MarketError::TooManyBids);
 
 		let current_price = descending_price::<T>(block_number, &sale);
 		let bid_price = price_limit.min(current_price);
@@ -590,7 +590,7 @@ impl<T: Config> Market for Pallet<T> {
 		block_number: RelayBlockNumberOf<T>,
 		who: &T::AccountId,
 		_renewal: PotentialRenewalId,
-		recorded_price: BalanceOf<T>,
+		_recorded_price: BalanceOf<T>,
 	) -> Result<RenewalOrderResult<Self::Balance, Self::BidId, Self::AccountId>, Self::Error> {
 		let config = Configuration::<T>::get().ok_or(MarketError::Uninitialized)?;
 		let status = Status::<T>::get().ok_or(MarketError::Uninitialized)?;
@@ -601,7 +601,9 @@ impl<T: Config> Market for Pallet<T> {
 				let clearing =
 					AuctionClearingPrice::<T>::get().unwrap_or(sale.reserve_price);
 
-				// Penalty applies when market was oversubscribed (all cores filled in auction).
+				// Penalty applies when the auction filled all offered cores, signaling high
+				// demand. This is checked once against auction outcomes (not total
+				// demand including renewers) so that all renewers pay a uniform penalty.
 				let allocations = Allocations::<T>::get();
 				let oversubscribed = allocations.len() as u16 >= sale.cores_offered;
 

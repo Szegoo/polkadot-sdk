@@ -75,7 +75,7 @@ pub enum MarketError {
 	Uninitialized,
 	TooEarly,
 	Unavailable,
-	SoldOut,
+	TooManyBids,
 	/// Operation not allowed in the current sale phase.
 	WrongPhase,
 	/// Bid price is above the current descending price.
@@ -93,7 +93,7 @@ impl From<MarketError> for DispatchError {
 			MarketError::Uninitialized => Self::Other("Uninitialized"),
 			MarketError::TooEarly => Self::Other("TooEarly"),
 			MarketError::Unavailable => Self::Other("Unavailable"),
-			MarketError::SoldOut => Self::Other("SoldOut"),
+			MarketError::TooManyBids => Self::Other("TooManyBids"),
 			MarketError::WrongPhase => Self::Other("WrongPhase"),
 			MarketError::BidTooHigh => Self::Other("BidTooHigh"),
 			MarketError::BidNotCancellable => Self::Other("BidNotCancellable"),
