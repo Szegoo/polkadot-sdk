@@ -179,7 +179,6 @@ pub(crate) type Status<T: Config> =
 pub(crate) type TickActionOf<T> = TickAction<
 	BalanceOf<T>,
 	<T as frame_system::Config>::AccountId,
-	(),
 	SaleInfoRecordOf<T>,
 >;
 

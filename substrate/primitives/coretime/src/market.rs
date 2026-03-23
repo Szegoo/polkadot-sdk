@@ -135,7 +135,7 @@ pub enum RenewalOrderResult<Balance, BidId, AccountId> {
 }
 
 /// Actions returned by `Market::tick` for the broker to process.
-pub enum TickAction<Balance, AccountId, BidId, SaleInfo> {
+pub enum TickAction<Balance, AccountId, SaleInfo> {
 	SellRegion {
 		owner: AccountId,
 		/// How much was paid for this region in total.
@@ -150,10 +150,6 @@ pub enum TickAction<Balance, AccountId, BidId, SaleInfo> {
 	Refund {
 		amount: Balance,
 		who: AccountId,
-	},
-	BidClosed {
-		id: BidId,
-		owner: AccountId,
 	},
 	SaleRotated {
 		old_sale: SaleInfo,
@@ -271,7 +267,6 @@ pub trait Market {
 		TickAction<
 			Self::Balance,
 			Self::AccountId,
-			Self::BidId,
 			Self::SaleInfo,
 		>,
 	>;

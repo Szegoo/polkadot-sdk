@@ -219,7 +219,7 @@ type RelayBlockNumberOf<T> = <T as pallet::Config>::RelayBlockNumber;
 type ConfigRecordOf<T> = ConfigRecord<RelayBlockNumberOf<T>, BalanceOf<T>>;
 type SaleInfoRecordOf<T> = SaleInfoRecord<BalanceOf<T>, RelayBlockNumberOf<T>>;
 type TickActionOf<T> =
-	TickAction<BalanceOf<T>, <T as frame_system::Config>::AccountId, u32, SaleInfoRecordOf<T>>;
+	TickAction<BalanceOf<T>, <T as frame_system::Config>::AccountId, SaleInfoRecordOf<T>>;
 
 /// The phase of a Bulk Coretime Sale.
 #[derive(

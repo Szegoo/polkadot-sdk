@@ -221,11 +221,6 @@ impl<T: Config> Pallet<T> {
 
 				Self::refund(&who, amount).defensive_ok();
 			},
-			TickAction::BidClosed { id, owner } => {
-				meter.consume(T::WeightInfo::process_tick_action_bid_closed());
-
-				Self::deposit_event(Event::BidClosed { bid_id: id, owner });
-			},
 			TickAction::SaleRotated { old_sale, new_sale, new_prices, .. } => {
 				if let Some(status) = Self::market_status() {
 					meter.consume(T::WeightInfo::process_tick_action_sale_rotated(

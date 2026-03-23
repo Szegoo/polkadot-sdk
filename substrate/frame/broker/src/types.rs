@@ -34,7 +34,7 @@ pub type BidIdOf<T> = <<T as Config>::Market as Market>::BidId;
 pub type SaleInfoRecordOf<T> = <<T as Config>::Market as Market>::SaleInfo;
 pub type ConfigRecordOf<T> = <<T as Config>::Market as Market>::Config;
 pub type TickActionOf<T> =
-	TickAction<BalanceOf<T>, <T as SConfig>::AccountId, BidIdOf<T>, SaleInfoRecordOf<T>>;
+	TickAction<BalanceOf<T>, <T as SConfig>::AccountId, SaleInfoRecordOf<T>>;
 
 /// Whether a core assignment is revokable or not.
 #[derive(

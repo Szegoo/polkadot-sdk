@@ -301,9 +301,9 @@ pub mod v4 {
 					);
 
 				let updated_config_record = crate::market::ConfigRecord {
-					advance_notice: config_record.advance_notice,
 					interlude_length: updated_interlude_length,
 					leadin_length: updated_leadin_length,
+					advance_notice: config_record.advance_notice,
 					region_length: config_record.region_length,
 					ideal_bulk_proportion: config_record.ideal_bulk_proportion,
 					limit_cores_offered: config_record.limit_cores_offered,
@@ -319,17 +319,19 @@ pub mod v4 {
 
 				let updated_sale_start: RelayBlockNumberOf<T> =
 					BlockConversion::convert_block_number_to_relay_height(sale_info.sale_start);
+				let updated_leadin_length: RelayBlockNumberOf<T> =
+					BlockConversion::convert_block_length_to_relay_length(sale_info.leadin_length);
 
 				let updated_sale_info = crate::market::SaleInfoRecord {
 					sale_start: updated_sale_start,
-					leadin_length: BlockConversion::convert_block_length_to_relay_length(sale_info.leadin_length),
+					leadin_length: updated_leadin_length,
 					end_price: sale_info.price,
-					sellout_price: sale_info.sellout_price,
 					region_begin: sale_info.region_begin,
 					region_end: sale_info.region_end,
 					ideal_cores_sold: sale_info.ideal_cores_sold,
 					cores_offered: sale_info.cores_offered,
 					first_core: sale_info.first_core,
+					sellout_price: sale_info.sellout_price,
 					cores_sold: sale_info.cores_sold,
 				};
 				T::Market::set_sale_info(updated_sale_info.into());
@@ -344,20 +346,40 @@ pub mod v4 {
 				old_interlude_length,
 				old_configuration_leadin_length,
 				old_sale_start,
-				_old_sale_info_leadin_length,
+				old_sale_info_leadin_length,
 			): (BlockNumberFor<T>, BlockNumberFor<T>, BlockNumberFor<T>, BlockNumberFor<T>) =
 				Decode::decode(&mut &state[..]).expect("pre_upgrade provides a valid state; qed");
 
-			if let Some(_config_record) = T::Market::configuration() {
-				// Post-upgrade checks for config fields require concrete type knowledge.
-				// These checks are only meaningful for the legacy market migration.
-				// TODO: re-enable once migration is tied to the legacy market type.
+			if let Some(config_record) = crate::market::Configuration::<T>::get() {
+				ensure!(
+					Self::verify_updated_block_length(
+						old_configuration_leadin_length,
+						config_record.leadin_length
+					),
+					"must migrate configuration leadin_length"
+				);
+
+				ensure!(
+					Self::verify_updated_block_length(
+						old_interlude_length,
+						config_record.interlude_length
+					),
+					"must migrate configuration interlude_length"
+				);
 			}
 
-			if let Some(sale_info) = T::Market::sale_info() {
+			if let Some(sale_info) = crate::market::SaleInfo::<T>::get() {
 				ensure!(
-					Self::verify_updated_block_time(old_sale_start, sale_info.sale_start()),
+					Self::verify_updated_block_time(old_sale_start, sale_info.sale_start),
 					"must migrate sale info sale_start"
+				);
+
+				ensure!(
+					Self::verify_updated_block_length(
+						old_sale_info_leadin_length,
+						sale_info.leadin_length
+					),
+					"must migrate sale info leadin_length"
 				);
 			}
 
