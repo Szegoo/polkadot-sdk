@@ -811,7 +811,8 @@ impl_runtime_apis! {
 
 	impl pallet_broker::runtime_api::BrokerApi<Block, Balance> for Runtime {
 		fn sale_price() -> Result<Balance, DispatchError> {
-			Broker::current_price()
+			Broker::market_current_price()
+				.ok_or(DispatchError::Other("No sale"))
 		}
 	}
 

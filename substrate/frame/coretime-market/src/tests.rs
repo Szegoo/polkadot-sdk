@@ -20,24 +20,19 @@
 use crate::mock::*;
 use frame_support::assert_ok;
 use frame_support::weights::WeightMeter;
-use sp_arithmetic::Perbill;
 use crate::SalePhase;
 use crate::{ConfigRecord, SaleInfoRecord};
 use sp_coretime::{
 	CoreMask, Market, MarketError, MarketState, OrderResult, PotentialRenewalId,
 	RenewalOrderResult, TickAction,
 };
-use sp_runtime::DispatchError;
-
-type CoretimeMarketImpl = CoretimeMarket;
-
 fn start_sales(reserve_price: u64, extra_cores: u16) {
-	assert_ok!(CoretimeMarketImpl::start_sales(0, reserve_price, extra_cores));
+	assert_ok!(CoretimeMarket::start_sales(0, reserve_price, extra_cores));
 }
 
 fn tick(block_number: u64) -> Vec<TickAction<u64, u64, SaleInfoRecord<u64, u64>>> {
 	let mut meter = WeightMeter::new();
-	CoretimeMarketImpl::tick(block_number, &mut meter)
+	CoretimeMarket::tick(block_number, &mut meter)
 }
 
 fn place_bid(
@@ -45,7 +40,7 @@ fn place_bid(
 	who: u64,
 	price_limit: u64,
 ) -> Result<OrderResult<u64, u32>, MarketError> {
-	CoretimeMarketImpl::place_order(block_number, &who, price_limit)
+	CoretimeMarket::place_order(block_number, &who, price_limit)
 }
 
 fn place_renewal(
@@ -56,7 +51,7 @@ fn place_renewal(
 	recorded_price: u64,
 ) -> Result<RenewalOrderResult<u64, u32, u64>, MarketError> {
 	let renewal_id = PotentialRenewalId { core, when };
-	CoretimeMarketImpl::place_renewal_order(block_number, &who, renewal_id, recorded_price)
+	CoretimeMarket::place_renewal_order(block_number, &who, renewal_id, recorded_price)
 }
 
 // ============================================================================
@@ -69,7 +64,7 @@ fn start_sales_initializes_market_phase() {
 		start_sales(100, 2);
 
 		assert_eq!(crate::CurrentPhase::<Test>::get(), Some(SalePhase::Market));
-		let sale = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
+		let sale = <CoretimeMarket as MarketState>::sale_info().unwrap();
 		assert!(sale.cores_offered > 0);
 		assert_eq!(sale.cores_sold, 0);
 		assert_eq!(sale.clearing_price, None);
@@ -83,8 +78,8 @@ fn market_to_renewal_transition_on_timeout() {
 	TestExt::new().execute_with(|| {
 		start_sales(100, 2);
 
-		let sale = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
-		let config = <CoretimeMarketImpl as MarketState>::configuration().unwrap();
+		let sale = <CoretimeMarket as MarketState>::sale_info().unwrap();
+		let config = <CoretimeMarket as MarketState>::configuration().unwrap();
 		let market_end = sale.sale_start + config.market_period;
 
 		// Before market end: still Market.
@@ -102,8 +97,8 @@ fn renewal_to_settlement_transition() {
 	TestExt::new().execute_with(|| {
 		start_sales(100, 2);
 
-		let sale = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
-		let config = <CoretimeMarketImpl as MarketState>::configuration().unwrap();
+		let sale = <CoretimeMarket as MarketState>::sale_info().unwrap();
+		let config = <CoretimeMarket as MarketState>::configuration().unwrap();
 		let market_end = sale.sale_start + config.market_period;
 		let renewal_end = market_end + config.renewal_period;
 
@@ -123,8 +118,8 @@ fn settlement_to_market_transition_on_rotation() {
 	TestExt::new().execute_with(|| {
 		start_sales(100, 2);
 
-		let sale = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
-		let config = <CoretimeMarketImpl as MarketState>::configuration().unwrap();
+		let sale = <CoretimeMarket as MarketState>::sale_info().unwrap();
+		let config = <CoretimeMarket as MarketState>::configuration().unwrap();
 		let market_end = sale.sale_start + config.market_period;
 		let renewal_end = market_end + config.renewal_period;
 
@@ -133,9 +128,9 @@ fn settlement_to_market_transition_on_rotation() {
 		assert_eq!(crate::CurrentPhase::<Test>::get(), Some(SalePhase::Settlement));
 
 		// Set last_committed_timeslice >= region_begin to trigger rotation.
-		let mut status = <CoretimeMarketImpl as MarketState>::status().unwrap();
+		let mut status = <CoretimeMarket as MarketState>::status().unwrap();
 		status.last_committed_timeslice = sale.region_begin;
-		<CoretimeMarketImpl as MarketState>::set_status(status);
+		<CoretimeMarket as MarketState>::set_status(status);
 
 		let actions = tick(renewal_end + 1);
 		assert_eq!(crate::CurrentPhase::<Test>::get(), Some(SalePhase::Market));
@@ -152,10 +147,10 @@ fn place_bid_works_during_market_phase() {
 	TestExt::new().execute_with(|| {
 		start_sales(100, 2);
 
-		let sale = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
+		let sale = <CoretimeMarket as MarketState>::sale_info().unwrap();
 		let block = sale.sale_start + 1;
 		let current_price =
-			<CoretimeMarketImpl as MarketState>::current_price(block).unwrap();
+			<CoretimeMarket as MarketState>::current_price(block).unwrap();
 
 		let result = place_bid(block, 1, current_price);
 		assert!(result.is_ok());
@@ -173,9 +168,9 @@ fn place_bid_works_during_market_phase() {
 fn place_bid_fails_before_sale_start() {
 	TestExt::new().execute_with(|| {
 		// Start at block 1 so there's a block before sale_start to test with.
-		assert_ok!(CoretimeMarketImpl::start_sales(1, 100, 2));
+		assert_ok!(CoretimeMarket::start_sales(1, 100, 2));
 
-		let sale = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
+		let sale = <CoretimeMarket as MarketState>::sale_info().unwrap();
 		assert!(matches!(
 			place_bid(sale.sale_start - 1, 1, 100),
 			Err(MarketError::TooEarly)
@@ -188,10 +183,10 @@ fn place_bid_clamps_to_current_price() {
 	TestExt::new().execute_with(|| {
 		start_sales(100, 2);
 
-		let sale = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
+		let sale = <CoretimeMarket as MarketState>::sale_info().unwrap();
 		let block = sale.sale_start + 1;
 		let current_price =
-			<CoretimeMarketImpl as MarketState>::current_price(block).unwrap();
+			<CoretimeMarket as MarketState>::current_price(block).unwrap();
 
 		// Bidding above current price should clamp to current price, not fail.
 		let result = place_bid(block, 1, current_price + 1).unwrap();
@@ -209,8 +204,8 @@ fn place_bid_fails_during_renewal_phase() {
 	TestExt::new().execute_with(|| {
 		start_sales(100, 2);
 
-		let sale = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
-		let config = <CoretimeMarketImpl as MarketState>::configuration().unwrap();
+		let sale = <CoretimeMarket as MarketState>::sale_info().unwrap();
+		let config = <CoretimeMarket as MarketState>::configuration().unwrap();
 		let market_end = sale.sale_start + config.market_period;
 
 		tick(market_end);
@@ -235,10 +230,10 @@ fn place_bid_enforces_max_bids() {
 	TestExt::new().execute_with(|| {
 		start_sales(100, 200);
 
-		let sale = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
+		let sale = <CoretimeMarket as MarketState>::sale_info().unwrap();
 		let block = sale.sale_start + 1;
 		let current_price =
-			<CoretimeMarketImpl as MarketState>::current_price(block).unwrap();
+			<CoretimeMarket as MarketState>::current_price(block).unwrap();
 
 		// Place MaxBids (100) bids.
 		for i in 0..100u64 {
@@ -262,10 +257,10 @@ fn clearing_price_is_kth_highest_bid() {
 	TestExt::new().execute_with(|| {
 		start_sales(10, 2);
 
-		let sale = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
+		let sale = <CoretimeMarket as MarketState>::sale_info().unwrap();
 		let block = sale.sale_start + 1;
 		let current_price =
-			<CoretimeMarketImpl as MarketState>::current_price(block).unwrap();
+			<CoretimeMarket as MarketState>::current_price(block).unwrap();
 
 		let high_bid = current_price;
 		let mid_bid = current_price / 2;
@@ -275,7 +270,7 @@ fn clearing_price_is_kth_highest_bid() {
 		assert!(place_bid(block, 2, mid_bid).is_ok());
 		assert!(place_bid(block, 3, low_bid).is_ok());
 
-		let config = <CoretimeMarketImpl as MarketState>::configuration().unwrap();
+		let config = <CoretimeMarket as MarketState>::configuration().unwrap();
 		let market_end = sale.sale_start + config.market_period;
 
 		let actions = tick(market_end);
@@ -301,18 +296,75 @@ fn clearing_price_is_kth_highest_bid() {
 }
 
 #[test]
+fn shuffle_changes_winners_with_different_parent_hash() {
+	use sp_core::H256;
+
+	/// Run an auction with 4 tied bids for 2 cores using the given parent hash.
+	/// Returns the sorted winner account IDs.
+	fn run_with_seed(seed: H256) -> Vec<u64> {
+		start_sales(10, 2);
+
+		let sale = <CoretimeMarket as MarketState>::sale_info().unwrap();
+		let block = sale.sale_start + 1;
+		let price = <CoretimeMarket as MarketState>::current_price(block).unwrap();
+
+		assert!(place_bid(block, 1, price).is_ok());
+		assert!(place_bid(block, 2, price).is_ok());
+		assert!(place_bid(block, 3, price).is_ok());
+		assert!(place_bid(block, 4, price).is_ok());
+
+		let config = <CoretimeMarket as MarketState>::configuration().unwrap();
+		let market_end = sale.sale_start + config.market_period;
+
+		System::set_parent_hash(seed);
+		tick(market_end);
+
+		let allocations = crate::Allocations::<Test>::get();
+		assert_eq!(allocations.len(), 2);
+		let mut winners: Vec<u64> = allocations.iter().map(|a| a.who).collect();
+		winners.sort();
+		winners
+	}
+
+	// Run auctions with different parent hashes and verify different winner sets.
+	// The shuffle reads bytes at offsets 0, 4, 8 so we need hashes that differ there.
+	let mut found_different = false;
+	let seeds = [
+		H256::from([1u8; 32]),
+		H256::from([2u8; 32]),
+		H256::from([42u8; 32]),
+		H256::from([99u8; 32]),
+	];
+
+	let mut results = Vec::new();
+	for seed in seeds {
+		let winners = TestExt::new().execute_with(|| run_with_seed(seed));
+		results.push(winners);
+	}
+
+	// At least two different winner sets should appear across the seeds.
+	for i in 1..results.len() {
+		if results[i] != results[0] {
+			found_different = true;
+			break;
+		}
+	}
+	assert!(found_different, "Shuffle should produce different winners with different seeds");
+}
+
+#[test]
 fn clearing_price_falls_back_to_reserve_when_undersubscribed() {
 	TestExt::new().execute_with(|| {
 		start_sales(10, 2);
 
-		let sale = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
+		let sale = <CoretimeMarket as MarketState>::sale_info().unwrap();
 		let block = sale.sale_start + 1;
 		let current_price =
-			<CoretimeMarketImpl as MarketState>::current_price(block).unwrap();
+			<CoretimeMarket as MarketState>::current_price(block).unwrap();
 
 		assert!(place_bid(block, 1, current_price).is_ok());
 
-		let config = <CoretimeMarketImpl as MarketState>::configuration().unwrap();
+		let config = <CoretimeMarket as MarketState>::configuration().unwrap();
 		tick(sale.sale_start + config.market_period);
 
 		let clearing = crate::AuctionClearingPrice::<Test>::get().unwrap();
@@ -325,8 +377,8 @@ fn no_bids_results_in_reserve_clearing_price() {
 	TestExt::new().execute_with(|| {
 		start_sales(50, 2);
 
-		let sale = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
-		let config = <CoretimeMarketImpl as MarketState>::configuration().unwrap();
+		let sale = <CoretimeMarket as MarketState>::sale_info().unwrap();
+		let config = <CoretimeMarket as MarketState>::configuration().unwrap();
 
 		tick(sale.sale_start + config.market_period);
 
@@ -341,14 +393,14 @@ fn winners_pay_clearing_price_not_bid_price() {
 	TestExt::new().execute_with(|| {
 		start_sales(10, 2);
 
-		let sale = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
+		let sale = <CoretimeMarket as MarketState>::sale_info().unwrap();
 		let block = sale.sale_start + 1;
-		let price = <CoretimeMarketImpl as MarketState>::current_price(block).unwrap();
+		let price = <CoretimeMarket as MarketState>::current_price(block).unwrap();
 
 		assert!(place_bid(block, 1, price).is_ok());
 		assert!(place_bid(block, 2, price).is_ok());
 
-		let config = <CoretimeMarketImpl as MarketState>::configuration().unwrap();
+		let config = <CoretimeMarket as MarketState>::configuration().unwrap();
 		tick(sale.sale_start + config.market_period);
 
 		let allocations = crate::Allocations::<Test>::get();
@@ -367,14 +419,14 @@ fn regions_issued_at_renewal_end() {
 	TestExt::new().execute_with(|| {
 		start_sales(10, 2);
 
-		let sale = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
+		let sale = <CoretimeMarket as MarketState>::sale_info().unwrap();
 		let block = sale.sale_start + 1;
-		let price = <CoretimeMarketImpl as MarketState>::current_price(block).unwrap();
+		let price = <CoretimeMarket as MarketState>::current_price(block).unwrap();
 
 		assert!(place_bid(block, 1, price).is_ok());
 		assert!(place_bid(block, 2, price).is_ok());
 
-		let config = <CoretimeMarketImpl as MarketState>::configuration().unwrap();
+		let config = <CoretimeMarket as MarketState>::configuration().unwrap();
 		let market_end = sale.sale_start + config.market_period;
 		let renewal_end = market_end + config.renewal_period;
 
@@ -408,7 +460,7 @@ fn renewal_during_market_phase_fails() {
 	TestExt::new().execute_with(|| {
 		start_sales(100, 2);
 
-		let sale = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
+		let sale = <CoretimeMarket as MarketState>::sale_info().unwrap();
 		let block = sale.sale_start + 1;
 
 		// Renewals are not allowed during Market phase — use place_order instead.
@@ -422,13 +474,13 @@ fn renewal_during_renewal_phase_gets_core() {
 	TestExt::new().execute_with(|| {
 		start_sales(10, 2);
 
-		let sale = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
-		let config = <CoretimeMarketImpl as MarketState>::configuration().unwrap();
+		let sale = <CoretimeMarket as MarketState>::sale_info().unwrap();
+		let config = <CoretimeMarket as MarketState>::configuration().unwrap();
 		let market_end = sale.sale_start + config.market_period;
 
 		// Only 1 bid out of 2 cores — undersubscribed.
 		let block = sale.sale_start + 1;
-		let price = <CoretimeMarketImpl as MarketState>::current_price(block).unwrap();
+		let price = <CoretimeMarket as MarketState>::current_price(block).unwrap();
 		assert!(place_bid(block, 1, price).is_ok());
 
 		tick(market_end);
@@ -451,12 +503,12 @@ fn renewal_with_displacement() {
 	TestExt::new().execute_with(|| {
 		start_sales(10, 2);
 
-		let sale = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
-		let config = <CoretimeMarketImpl as MarketState>::configuration().unwrap();
+		let sale = <CoretimeMarket as MarketState>::sale_info().unwrap();
+		let config = <CoretimeMarket as MarketState>::configuration().unwrap();
 		let market_end = sale.sale_start + config.market_period;
 
 		let block = sale.sale_start + 1;
-		let price = <CoretimeMarketImpl as MarketState>::current_price(block).unwrap();
+		let price = <CoretimeMarket as MarketState>::current_price(block).unwrap();
 		assert!(place_bid(block, 10, price).is_ok());
 		assert!(place_bid(block, 20, price).is_ok());
 
@@ -489,12 +541,12 @@ fn renewal_displacement_protects_renewers_with_rights() {
 	TestExt::new().execute_with(|| {
 		start_sales(10, 2);
 
-		let sale = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
-		let config = <CoretimeMarketImpl as MarketState>::configuration().unwrap();
+		let sale = <CoretimeMarket as MarketState>::sale_info().unwrap();
+		let config = <CoretimeMarket as MarketState>::configuration().unwrap();
 		let market_end = sale.sale_start + config.market_period;
 
 		let block = sale.sale_start + 1;
-		let price = <CoretimeMarketImpl as MarketState>::current_price(block).unwrap();
+		let price = <CoretimeMarket as MarketState>::current_price(block).unwrap();
 
 		// Bidder 10 has renewal rights for this sale period — protected from displacement.
 		TestRenewalRights::set(10, sale.region_begin, 1);
@@ -521,12 +573,12 @@ fn renewal_fails_when_all_winners_have_renewal_rights() {
 	TestExt::new().execute_with(|| {
 		start_sales(10, 2);
 
-		let sale = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
-		let config = <CoretimeMarketImpl as MarketState>::configuration().unwrap();
+		let sale = <CoretimeMarket as MarketState>::sale_info().unwrap();
+		let config = <CoretimeMarket as MarketState>::configuration().unwrap();
 		let market_end = sale.sale_start + config.market_period;
 
 		let block = sale.sale_start + 1;
-		let price = <CoretimeMarketImpl as MarketState>::current_price(block).unwrap();
+		let price = <CoretimeMarket as MarketState>::current_price(block).unwrap();
 
 		TestRenewalRights::set(10, sale.region_begin, 1);
 		TestRenewalRights::set(20, sale.region_begin, 1);
@@ -546,12 +598,12 @@ fn renewal_penalty_applied_when_oversubscribed() {
 	TestExt::new().execute_with(|| {
 		start_sales(10, 2);
 
-		let sale = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
-		let config = <CoretimeMarketImpl as MarketState>::configuration().unwrap();
+		let sale = <CoretimeMarket as MarketState>::sale_info().unwrap();
+		let config = <CoretimeMarket as MarketState>::configuration().unwrap();
 		let market_end = sale.sale_start + config.market_period;
 
 		let block = sale.sale_start + 1;
-		let price = <CoretimeMarketImpl as MarketState>::current_price(block).unwrap();
+		let price = <CoretimeMarket as MarketState>::current_price(block).unwrap();
 
 		assert!(place_bid(block, 10, price).is_ok());
 		assert!(place_bid(block, 20, price).is_ok());
@@ -578,12 +630,12 @@ fn renewal_no_penalty_when_undersubscribed() {
 	TestExt::new().execute_with(|| {
 		start_sales(10, 3);
 
-		let sale = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
-		let config = <CoretimeMarketImpl as MarketState>::configuration().unwrap();
+		let sale = <CoretimeMarket as MarketState>::sale_info().unwrap();
+		let config = <CoretimeMarket as MarketState>::configuration().unwrap();
 		let market_end = sale.sale_start + config.market_period;
 
 		let block = sale.sale_start + 1;
-		let price = <CoretimeMarketImpl as MarketState>::current_price(block).unwrap();
+		let price = <CoretimeMarket as MarketState>::current_price(block).unwrap();
 
 		assert!(place_bid(block, 10, price).is_ok());
 
@@ -607,8 +659,8 @@ fn renewal_fails_during_settlement() {
 	TestExt::new().execute_with(|| {
 		start_sales(10, 2);
 
-		let sale = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
-		let config = <CoretimeMarketImpl as MarketState>::configuration().unwrap();
+		let sale = <CoretimeMarket as MarketState>::sale_info().unwrap();
+		let config = <CoretimeMarket as MarketState>::configuration().unwrap();
 		let market_end = sale.sale_start + config.market_period;
 		let renewal_end = market_end + config.renewal_period;
 
@@ -629,9 +681,9 @@ fn raise_bid_works() {
 	TestExt::new().execute_with(|| {
 		start_sales(100, 2);
 
-		let sale = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
+		let sale = <CoretimeMarket as MarketState>::sale_info().unwrap();
 		let block = sale.sale_start + 1;
-		let price = <CoretimeMarketImpl as MarketState>::current_price(block).unwrap();
+		let price = <CoretimeMarket as MarketState>::current_price(block).unwrap();
 
 		let initial_bid = price / 2;
 		let result = place_bid(block, 1, initial_bid).unwrap();
@@ -642,7 +694,7 @@ fn raise_bid_works() {
 
 		let new_price = price;
 		let additional =
-			CoretimeMarketImpl::raise_bid(block, bid_id, &1, new_price).unwrap();
+			CoretimeMarket::raise_bid(block, bid_id, &1, new_price).unwrap();
 		assert_eq!(additional, new_price - initial_bid);
 
 		let bid = crate::Bids::<Test>::get(bid_id).unwrap();
@@ -655,9 +707,9 @@ fn raise_bid_fails_for_wrong_owner() {
 	TestExt::new().execute_with(|| {
 		start_sales(100, 2);
 
-		let sale = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
+		let sale = <CoretimeMarket as MarketState>::sale_info().unwrap();
 		let block = sale.sale_start + 1;
-		let price = <CoretimeMarketImpl as MarketState>::current_price(block).unwrap();
+		let price = <CoretimeMarket as MarketState>::current_price(block).unwrap();
 
 		let result = place_bid(block, 1, price / 2).unwrap();
 		let bid_id = match result {
@@ -666,7 +718,7 @@ fn raise_bid_fails_for_wrong_owner() {
 		};
 
 		assert!(matches!(
-			CoretimeMarketImpl::raise_bid(block, bid_id, &2, price),
+			CoretimeMarket::raise_bid(block, bid_id, &2, price),
 			Err(MarketError::BidNotExist)
 		));
 	});
@@ -677,9 +729,9 @@ fn raise_bid_fails_for_lower_price() {
 	TestExt::new().execute_with(|| {
 		start_sales(100, 2);
 
-		let sale = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
+		let sale = <CoretimeMarket as MarketState>::sale_info().unwrap();
 		let block = sale.sale_start + 1;
-		let price = <CoretimeMarketImpl as MarketState>::current_price(block).unwrap();
+		let price = <CoretimeMarket as MarketState>::current_price(block).unwrap();
 
 		let result = place_bid(block, 1, price).unwrap();
 		let bid_id = match result {
@@ -688,7 +740,7 @@ fn raise_bid_fails_for_lower_price() {
 		};
 
 		assert!(matches!(
-			CoretimeMarketImpl::raise_bid(block, bid_id, &1, price / 2),
+			CoretimeMarket::raise_bid(block, bid_id, &1, price / 2),
 			Err(MarketError::Overpriced)
 		));
 	});
@@ -699,9 +751,9 @@ fn raise_bid_fails_above_current_price() {
 	TestExt::new().execute_with(|| {
 		start_sales(100, 2);
 
-		let sale = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
+		let sale = <CoretimeMarket as MarketState>::sale_info().unwrap();
 		let block = sale.sale_start + 1;
-		let price = <CoretimeMarketImpl as MarketState>::current_price(block).unwrap();
+		let price = <CoretimeMarket as MarketState>::current_price(block).unwrap();
 
 		let result = place_bid(block, 1, price / 3).unwrap();
 		let bid_id = match result {
@@ -711,7 +763,7 @@ fn raise_bid_fails_above_current_price() {
 
 		// Try to raise above current descending price.
 		assert!(matches!(
-			CoretimeMarketImpl::raise_bid(block, bid_id, &1, price + 1),
+			CoretimeMarket::raise_bid(block, bid_id, &1, price + 1),
 			Err(MarketError::BidTooHigh)
 		));
 	});
@@ -722,9 +774,9 @@ fn raise_bid_fails_during_renewal_phase() {
 	TestExt::new().execute_with(|| {
 		start_sales(100, 2);
 
-		let sale = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
+		let sale = <CoretimeMarket as MarketState>::sale_info().unwrap();
 		let block = sale.sale_start + 1;
-		let price = <CoretimeMarketImpl as MarketState>::current_price(block).unwrap();
+		let price = <CoretimeMarket as MarketState>::current_price(block).unwrap();
 
 		let result = place_bid(block, 1, price / 2).unwrap();
 		let bid_id = match result {
@@ -732,11 +784,11 @@ fn raise_bid_fails_during_renewal_phase() {
 			_ => panic!("Expected BidPlaced"),
 		};
 
-		let config = <CoretimeMarketImpl as MarketState>::configuration().unwrap();
+		let config = <CoretimeMarket as MarketState>::configuration().unwrap();
 		tick(sale.sale_start + config.market_period);
 
 		assert!(matches!(
-			CoretimeMarketImpl::raise_bid(block, bid_id, &1, price),
+			CoretimeMarket::raise_bid(block, bid_id, &1, price),
 			Err(MarketError::WrongPhase)
 		));
 	});
@@ -751,16 +803,16 @@ fn price_descends_linearly_during_market_phase() {
 	TestExt::new().execute_with(|| {
 		start_sales(100, 2);
 
-		let sale = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
-		let config = <CoretimeMarketImpl as MarketState>::configuration().unwrap();
+		let sale = <CoretimeMarket as MarketState>::sale_info().unwrap();
+		let config = <CoretimeMarket as MarketState>::configuration().unwrap();
 
 		let price_start =
-			<CoretimeMarketImpl as MarketState>::current_price(sale.sale_start + 1).unwrap();
-		let price_mid = <CoretimeMarketImpl as MarketState>::current_price(
+			<CoretimeMarket as MarketState>::current_price(sale.sale_start + 1).unwrap();
+		let price_mid = <CoretimeMarket as MarketState>::current_price(
 			sale.sale_start + config.market_period / 2,
 		)
 		.unwrap();
-		let price_end = <CoretimeMarketImpl as MarketState>::current_price(
+		let price_end = <CoretimeMarket as MarketState>::current_price(
 			sale.sale_start + config.market_period,
 		)
 		.unwrap();
@@ -795,27 +847,31 @@ fn sale_rotation_creates_new_sale_with_correct_parameters() {
 	TestExt::new().execute_with(|| {
 		start_sales(100, 2);
 
-		let sale1 = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
-		let config = <CoretimeMarketImpl as MarketState>::configuration().unwrap();
+		let sale1 = <CoretimeMarket as MarketState>::sale_info().unwrap();
+		let config = <CoretimeMarket as MarketState>::configuration().unwrap();
 		let market_end = sale1.sale_start + config.market_period;
 		let renewal_end = market_end + config.renewal_period;
 
 		tick(market_end);
 		tick(renewal_end);
 
-		let mut status = <CoretimeMarketImpl as MarketState>::status().unwrap();
+		let mut status = <CoretimeMarket as MarketState>::status().unwrap();
 		status.last_committed_timeslice = sale1.region_begin;
-		<CoretimeMarketImpl as MarketState>::set_status(status);
+		<CoretimeMarket as MarketState>::set_status(status);
 
 		let rotation_block = renewal_end + 1;
 		tick(rotation_block);
 
-		let sale2 = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
+		let sale2 = <CoretimeMarket as MarketState>::sale_info().unwrap();
 		assert_eq!(sale2.region_begin, sale1.region_end);
 		assert_eq!(sale2.region_end, sale1.region_end + config.region_length);
 		assert_eq!(sale2.clearing_price, None);
 		assert_eq!(sale2.cores_sold, 0);
 		assert_eq!(sale2.sale_start, rotation_block);
+		// RFC-17: opening_price = max(min_opening_price, price_multiplier * reserve_price).
+		let expected_opening =
+			(config.price_multiplier as u64 * sale2.reserve_price).max(config.min_opening_price);
+		assert_eq!(sale2.opening_price, expected_opening);
 	});
 }
 
@@ -824,10 +880,10 @@ fn sale_rotation_cleans_up_previous_state() {
 	TestExt::new().execute_with(|| {
 		start_sales(100, 2);
 
-		let sale = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
-		let config = <CoretimeMarketImpl as MarketState>::configuration().unwrap();
+		let sale = <CoretimeMarket as MarketState>::sale_info().unwrap();
+		let config = <CoretimeMarket as MarketState>::configuration().unwrap();
 		let block = sale.sale_start + 1;
-		let price = <CoretimeMarketImpl as MarketState>::current_price(block).unwrap();
+		let price = <CoretimeMarket as MarketState>::current_price(block).unwrap();
 
 		assert!(place_bid(block, 1, price).is_ok());
 
@@ -841,9 +897,9 @@ fn sale_rotation_cleans_up_previous_state() {
 		assert!(crate::AuctionClearingPrice::<Test>::get().is_some());
 		assert!(crate::NextBidId::<Test>::get() > 0);
 
-		let mut status = <CoretimeMarketImpl as MarketState>::status().unwrap();
+		let mut status = <CoretimeMarket as MarketState>::status().unwrap();
 		status.last_committed_timeslice = sale.region_begin;
-		<CoretimeMarketImpl as MarketState>::set_status(status);
+		<CoretimeMarket as MarketState>::set_status(status);
 
 		tick(renewal_end + 1);
 
@@ -860,11 +916,11 @@ fn sale_rotation_cleans_up_previous_state() {
 /// Helper: advance through a full sale cycle (market → renewal → settlement → rotation).
 /// `num_bids` bids are placed at the current price. Returns the new sale info after rotation.
 fn run_sale_cycle(num_bids: u32) -> SaleInfoRecord<u64, u64> {
-	let sale = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
-	let config = <CoretimeMarketImpl as MarketState>::configuration().unwrap();
+	let sale = <CoretimeMarket as MarketState>::sale_info().unwrap();
+	let config = <CoretimeMarket as MarketState>::configuration().unwrap();
 
 	let block = sale.sale_start + 1;
-	let price = <CoretimeMarketImpl as MarketState>::current_price(block).unwrap();
+	let price = <CoretimeMarket as MarketState>::current_price(block).unwrap();
 
 	for i in 0..num_bids {
 		assert!(place_bid(block, 1000 + i as u64, price).is_ok());
@@ -876,13 +932,13 @@ fn run_sale_cycle(num_bids: u32) -> SaleInfoRecord<u64, u64> {
 	tick(market_end);
 	tick(renewal_end);
 
-	let mut status = <CoretimeMarketImpl as MarketState>::status().unwrap();
+	let mut status = <CoretimeMarket as MarketState>::status().unwrap();
 	status.last_committed_timeslice = sale.region_begin;
-	<CoretimeMarketImpl as MarketState>::set_status(status);
+	<CoretimeMarket as MarketState>::set_status(status);
 
 	tick(renewal_end + 1);
 
-	<CoretimeMarketImpl as MarketState>::sale_info().unwrap()
+	<CoretimeMarket as MarketState>::sale_info().unwrap()
 }
 
 #[test]
@@ -916,7 +972,7 @@ fn reserve_price_does_not_fall_below_min() {
 		// Start with a very low reserve price.
 		start_sales(2, 3);
 
-		let config = <CoretimeMarketImpl as MarketState>::configuration().unwrap();
+		let config = <CoretimeMarket as MarketState>::configuration().unwrap();
 
 		// 0 bids → 0% consumption, exp(-2.25)≈0.1054, candidate=0 (truncated).
 		// Floor at min_reserve_price=1.
@@ -984,10 +1040,10 @@ fn full_sale_lifecycle() {
 	TestExt::new_with_config(config.clone()).execute_with(|| {
 		start_sales(100, 2);
 
-		let sale = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
+		let sale = <CoretimeMarket as MarketState>::sale_info().unwrap();
 		let block = sale.sale_start + 1;
 		let current_price =
-			<CoretimeMarketImpl as MarketState>::current_price(block).unwrap();
+			<CoretimeMarket as MarketState>::current_price(block).unwrap();
 
 		// --- Market Phase: 3 bidders compete for 2 cores ---
 		let bid1 = current_price;
@@ -1044,14 +1100,14 @@ fn full_sale_lifecycle() {
 		assert_eq!(crate::CurrentPhase::<Test>::get(), Some(SalePhase::Settlement));
 
 		// --- Settlement => Next sale ---
-		let mut status = <CoretimeMarketImpl as MarketState>::status().unwrap();
+		let mut status = <CoretimeMarket as MarketState>::status().unwrap();
 		status.last_committed_timeslice = sale.region_begin;
-		<CoretimeMarketImpl as MarketState>::set_status(status);
+		<CoretimeMarket as MarketState>::set_status(status);
 
 		tick(renewal_end + 1);
 		assert_eq!(crate::CurrentPhase::<Test>::get(), Some(SalePhase::Market));
 
-		let sale2 = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
+		let sale2 = <CoretimeMarket as MarketState>::sale_info().unwrap();
 		assert_eq!(sale2.region_begin, sale.region_end);
 	});
 }
@@ -1063,7 +1119,7 @@ fn full_sale_lifecycle() {
 #[test]
 fn market_state_current_price_returns_none_without_sale() {
 	TestExt::new().execute_with(|| {
-		assert_eq!(<CoretimeMarketImpl as MarketState>::current_price(1), None);
+		assert_eq!(<CoretimeMarket as MarketState>::current_price(1), None);
 	});
 }
 
@@ -1072,19 +1128,19 @@ fn market_state_returns_clearing_price_after_settlement() {
 	TestExt::new().execute_with(|| {
 		start_sales(50, 2);
 
-		let sale = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
-		let config = <CoretimeMarketImpl as MarketState>::configuration().unwrap();
+		let sale = <CoretimeMarket as MarketState>::sale_info().unwrap();
+		let config = <CoretimeMarket as MarketState>::configuration().unwrap();
 		let market_end = sale.sale_start + config.market_period;
 
 		let block = sale.sale_start + 1;
-		let price = <CoretimeMarketImpl as MarketState>::current_price(block).unwrap();
+		let price = <CoretimeMarket as MarketState>::current_price(block).unwrap();
 		assert!(place_bid(block, 1, price).is_ok());
 
 		tick(market_end);
 
 		let clearing = crate::AuctionClearingPrice::<Test>::get().unwrap();
 		let reported_price =
-			<CoretimeMarketImpl as MarketState>::current_price(market_end + 1).unwrap();
+			<CoretimeMarket as MarketState>::current_price(market_end + 1).unwrap();
 		assert_eq!(reported_price, clearing);
 	});
 }
@@ -1100,9 +1156,9 @@ fn events_emitted_on_bid_placed() {
 		start_sales(100, 2);
 		System::reset_events();
 
-		let sale = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
+		let sale = <CoretimeMarket as MarketState>::sale_info().unwrap();
 		let block = sale.sale_start + 1;
-		let price = <CoretimeMarketImpl as MarketState>::current_price(block).unwrap();
+		let price = <CoretimeMarket as MarketState>::current_price(block).unwrap();
 
 		assert!(place_bid(block, 1, price).is_ok());
 
@@ -1124,8 +1180,8 @@ fn events_emitted_on_phase_transitions() {
 		System::set_block_number(1);
 		start_sales(100, 2);
 
-		let sale = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
-		let config = <CoretimeMarketImpl as MarketState>::configuration().unwrap();
+		let sale = <CoretimeMarket as MarketState>::sale_info().unwrap();
+		let config = <CoretimeMarket as MarketState>::configuration().unwrap();
 		let market_end = sale.sale_start + config.market_period;
 
 		System::reset_events();
@@ -1152,9 +1208,9 @@ fn events_emitted_on_bid_raised() {
 		System::set_block_number(1);
 		start_sales(100, 2);
 
-		let sale = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
+		let sale = <CoretimeMarket as MarketState>::sale_info().unwrap();
 		let block = sale.sale_start + 1;
-		let price = <CoretimeMarketImpl as MarketState>::current_price(block).unwrap();
+		let price = <CoretimeMarket as MarketState>::current_price(block).unwrap();
 
 		let bid_id = match place_bid(block, 1, price / 2).unwrap() {
 			OrderResult::BidPlaced { id, .. } => id,
@@ -1162,7 +1218,7 @@ fn events_emitted_on_bid_raised() {
 		};
 
 		System::reset_events();
-		assert!(CoretimeMarketImpl::raise_bid(block, bid_id, &1, price).is_ok());
+		assert!(CoretimeMarket::raise_bid(block, bid_id, &1, price).is_ok());
 
 		let events = System::events();
 		assert!(events.iter().any(|e| matches!(
@@ -1182,12 +1238,12 @@ fn events_emitted_on_displacement() {
 		System::set_block_number(1);
 		start_sales(10, 2);
 
-		let sale = <CoretimeMarketImpl as MarketState>::sale_info().unwrap();
-		let config = <CoretimeMarketImpl as MarketState>::configuration().unwrap();
+		let sale = <CoretimeMarket as MarketState>::sale_info().unwrap();
+		let config = <CoretimeMarket as MarketState>::configuration().unwrap();
 		let market_end = sale.sale_start + config.market_period;
 
 		let block = sale.sale_start + 1;
-		let price = <CoretimeMarketImpl as MarketState>::current_price(block).unwrap();
+		let price = <CoretimeMarket as MarketState>::current_price(block).unwrap();
 
 		assert!(place_bid(block, 10, price).is_ok());
 		assert!(place_bid(block, 20, price).is_ok());

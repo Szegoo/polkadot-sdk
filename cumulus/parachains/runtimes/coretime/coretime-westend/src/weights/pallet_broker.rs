@@ -424,72 +424,23 @@ impl<T: frame_system::Config> pallet_broker::WeightInfo for WeightInfo<T> {
 	/// Proof: `ParachainSystem::ValidationData` (`max_values`: Some(1), `max_size`: None, mode: `Measured`)
 	/// Storage: `Broker::InstaPoolIo` (r:3 w:3)
 	/// Proof: `Broker::InstaPoolIo` (`max_values`: None, `max_size`: Some(28), added: 2503, mode: `MaxEncodedLen`)
-	/// Storage: `Broker::Reservations` (r:1 w:0)
-	/// Proof: `Broker::Reservations` (`max_values`: Some(1), `max_size`: Some(12021), added: 12516, mode: `MaxEncodedLen`)
-	/// Storage: `Broker::Leases` (r:1 w:1)
-	/// Proof: `Broker::Leases` (`max_values`: Some(1), `max_size`: Some(81), added: 576, mode: `MaxEncodedLen`)
-	/// Storage: `Broker::AutoRenewals` (r:1 w:1)
-	/// Proof: `Broker::AutoRenewals` (`max_values`: Some(1), `max_size`: Some(201), added: 696, mode: `MaxEncodedLen`)
-	/// Storage: `Broker::Configuration` (r:1 w:0)
-	/// Proof: `Broker::Configuration` (`max_values`: Some(1), `max_size`: Some(31), added: 526, mode: `MaxEncodedLen`)
-	/// Storage: `Broker::Status` (r:1 w:0)
-	/// Proof: `Broker::Status` (`max_values`: Some(1), `max_size`: Some(18), added: 513, mode: `MaxEncodedLen`)
-	/// Storage: `Broker::PotentialRenewals` (r:20 w:40)
-	/// Proof: `Broker::PotentialRenewals` (`max_values`: None, `max_size`: Some(1233), added: 3708, mode: `MaxEncodedLen`)
-	/// Storage: `System::Account` (r:21 w:20)
-	/// Proof: `System::Account` (`max_values`: None, `max_size`: Some(128), added: 2603, mode: `MaxEncodedLen`)
-	/// Storage: `Broker::SaleInfo` (r:0 w:1)
-	/// Proof: `Broker::SaleInfo` (`max_values`: Some(1), `max_size`: Some(57), added: 552, mode: `MaxEncodedLen`)
-	/// Storage: `Broker::Workplan` (r:0 w:1000)
-	/// Proof: `Broker::Workplan` (`max_values`: None, `max_size`: Some(1216), added: 3691, mode: `MaxEncodedLen`)
-	/// The range of component `n` is `[0, 1000]`.
-	fn rotate_sale(n: u32, ) -> Weight {
-		// Proof Size summary in bytes:
-		//  Measured:  `16480`
-		//  Estimated: `69404 + n * (8 ±1)`
-		// Minimum execution time: 32_855_000 picoseconds.
-		Weight::from_parts(698_275_537, 0)
-			.saturating_add(Weight::from_parts(0, 69404))
-			// Standard Error: 20_874
-			.saturating_add(Weight::from_parts(1_398_903, 0).saturating_mul(n.into()))
-			.saturating_add(T::DbWeight::get().reads(44))
-			.saturating_add(T::DbWeight::get().writes(57))
-			.saturating_add(T::DbWeight::get().writes((1_u64).saturating_mul(n.into())))
-			.saturating_add(Weight::from_parts(0, 8).saturating_mul(n.into()))
+	fn process_tick_action_bid_closed() -> Weight {
+		Weight::zero()
 	}
-	/// Storage: `Broker::InstaPoolIo` (r:1 w:0)
-	/// Proof: `Broker::InstaPoolIo` (`max_values`: None, `max_size`: Some(28), added: 2503, mode: `MaxEncodedLen`)
-	/// Storage: `Broker::InstaPoolHistory` (r:0 w:1)
-	/// Proof: `Broker::InstaPoolHistory` (`max_values`: None, `max_size`: Some(45), added: 2520, mode: `MaxEncodedLen`)
-	fn process_pool() -> Weight {
-		// Proof Size summary in bytes:
-		//  Measured:  `42`
-		//  Estimated: `3493`
-		// Minimum execution time: 7_801_000 picoseconds.
-		Weight::from_parts(8_153_000, 0)
-			.saturating_add(Weight::from_parts(0, 3493))
-			.saturating_add(T::DbWeight::get().reads(1))
-			.saturating_add(T::DbWeight::get().writes(1))
+	fn process_tick_action_renew_region() -> Weight {
+		Weight::zero()
 	}
-	/// Storage: `Broker::Workplan` (r:1 w:1)
-	/// Proof: `Broker::Workplan` (`max_values`: None, `max_size`: Some(1216), added: 3691, mode: `MaxEncodedLen`)
-	/// Storage: `Broker::Workload` (r:1 w:1)
-	/// Proof: `Broker::Workload` (`max_values`: None, `max_size`: Some(1212), added: 3687, mode: `MaxEncodedLen`)
-	/// Storage: `PolkadotXcm::SupportedVersion` (r:1 w:0)
-	/// Proof: `PolkadotXcm::SupportedVersion` (`max_values`: None, `max_size`: None, mode: `Measured`)
-	/// Storage: `ParachainSystem::HostConfiguration` (r:1 w:0)
-	/// Proof: `ParachainSystem::HostConfiguration` (`max_values`: Some(1), `max_size`: None, mode: `Measured`)
-	/// Storage: `ParachainSystem::PendingUpwardMessages` (r:1 w:1)
-	/// Proof: `ParachainSystem::PendingUpwardMessages` (`max_values`: Some(1), `max_size`: None, mode: `Measured`)
-	fn process_core_schedule() -> Weight {
-		// Proof Size summary in bytes:
-		//  Measured:  `1289`
-		//  Estimated: `4754`
-		// Minimum execution time: 31_074_000 picoseconds.
-		Weight::from_parts(32_112_000, 0)
-			.saturating_add(Weight::from_parts(0, 4754))
-			.saturating_add(T::DbWeight::get().reads(5))
-			.saturating_add(T::DbWeight::get().writes(3))
+	fn process_tick_action_sell_region() -> Weight {
+		Weight::zero()
+	}
+	fn process_tick_action_refund() -> Weight {
+		Weight::zero()
+	}
+	fn process_tick_action_sale_rotated(_n: u32) -> Weight {
+		Weight::zero()
+	}
+	fn process_tick_action_timeslice_commited(_n: u32) -> Weight {
+		Weight::zero()
 	}
 	/// Storage: `PolkadotXcm::SupportedVersion` (r:1 w:0)
 	/// Proof: `PolkadotXcm::SupportedVersion` (`max_values`: None, `max_size`: None, mode: `Measured`)

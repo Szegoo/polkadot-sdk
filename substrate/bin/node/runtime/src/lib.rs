@@ -2441,6 +2441,7 @@ impl MaybeConvert<TaskId, AccountId> for SovereignAccountOf {
 impl pallet_broker::Config for Runtime {
 	type RuntimeEvent = RuntimeEvent;
 	type Currency = Balances;
+	type RuntimeHoldReason = RuntimeHoldReason;
 	type OnRevenue = IntoAuthor;
 	type TimeslicePeriod = ConstU32<2>;
 	type MaxLeasedCores = ConstU32<5>;
@@ -2452,7 +2453,7 @@ impl pallet_broker::Config for Runtime {
 	type AdminOrigin = EnsureRoot<AccountId>;
 	type SovereignAccountOf = SovereignAccountOf;
 	type MaxAutoRenewals = ConstU32<10>;
-	type PriceAdapter = pallet_broker::CenterTargetPrice<Balance>;
+	type Market = pallet_broker::Pallet<Runtime>;
 	type MinimumCreditPurchase = MinimumCreditPurchase;
 }
 

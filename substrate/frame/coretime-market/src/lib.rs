@@ -892,6 +892,12 @@ impl<T: Config> MarketState for Pallet<T> {
 			region_length: 3,
 			penalty: Perbill::from_percent(10),
 			contribution_timeout: 5,
+			price_multiplier: 2,
+			min_opening_price: 10u32.into(),
+			target_consumption_rate: Perbill::from_percent(90),
+			sensitivity_millis: 2500,
+			min_reserve_price: 1u32.into(),
+			min_increment: 100u32.into(),
 		}
 	}
 }
@@ -1073,6 +1079,15 @@ fn finalize_sale<T: Config>(sale: &SaleInfoRecordOf<T>) -> Vec<TickActionOf<T>> 
 			region_id,
 			region_end: sale.region_end,
 		});
+	}
+
+	// Update cores_sold to include renewals so that adjust_reserve_price uses the total
+	// consumption (auction winners + renewals) for the next sale's reserve price.
+	let renewal_count = RenewalCount::<T>::get() as u16;
+	if renewal_count > 0 {
+		let mut updated_sale = sale.clone();
+		updated_sale.cores_sold = updated_sale.cores_sold.saturating_add(renewal_count);
+		SaleInfo::<T>::put(updated_sale);
 	}
 
 	Pallet::<T>::deposit_event(Event::SaleFinalized { regions_issued: count });
