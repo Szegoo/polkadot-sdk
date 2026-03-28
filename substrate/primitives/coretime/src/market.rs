@@ -22,7 +22,7 @@ use sp_runtime::DispatchError;
 use sp_weights::WeightMeter;
 
 use crate::{
-	AdaptedPrices, CoreIndex, PotentialRenewalId, RegionId, StatusRecord, Timeslice,
+	AdaptedPrices, CoreIndex, PotentialRenewalId, RegionId, Timeslice,
 };
 
 /// Trait for providing the reserved core count.
@@ -240,11 +240,14 @@ pub trait Market {
 	/// During Market phase: creates a bid like `place_order` (renewer participating in auction).
 	/// During Renewal phase: exercises renewal right. May displace the lowest non-renewer
 	/// auction winner if all cores are allocated.
+	///
+	/// `core_count` is the current total core count from the broker's status.
 	fn place_renewal_order(
 		block_number: Self::BlockNumber,
 		who: &Self::AccountId,
 		renewal: PotentialRenewalId,
 		recorded_price: Self::Balance,
+		core_count: CoreIndex,
 	) -> Result<RenewalOrderResult<Self::Balance, Self::BidId, Self::AccountId>, Self::Error>;
 
 	/// Raise an existing bid to a higher price.
@@ -260,8 +263,13 @@ pub trait Market {
 	) -> Result<Self::Balance, Self::Error>;
 
 	/// Logic that gets called in `on_initialize` hook.
+	///
+	/// `core_count` and `last_committed_timeslice` are provided by the broker from its
+	/// own status storage, so the market does not need to track them.
 	fn tick(
 		now: Self::BlockNumber,
+		core_count: CoreIndex,
+		last_committed_timeslice: Timeslice,
 		weight_meter: &mut WeightMeter,
 	) -> Vec<
 		TickAction<
@@ -276,9 +284,6 @@ pub trait Market {
 pub trait MarketState: Market {
 	fn configuration() -> Option<Self::Config>;
 	fn set_configuration(config: Self::Config);
-
-	fn status() -> Option<StatusRecord>;
-	fn set_status(status: StatusRecord);
 
 	fn sale_info() -> Option<Self::SaleInfo>;
 	fn set_sale_info(sale_info: Self::SaleInfo);

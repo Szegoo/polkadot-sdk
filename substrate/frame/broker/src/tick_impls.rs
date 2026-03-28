@@ -38,7 +38,7 @@ impl<T: Config> Pallet<T> {
 		let mut meter = WeightMeter::new();
 		meter.consume(T::WeightInfo::do_tick_base());
 
-		let Some(mut status) = Self::market_status() else {
+		let Some(mut status) = Status::<T>::get() else {
 			return meter.consumed();
 		};
 
@@ -46,7 +46,7 @@ impl<T: Config> Pallet<T> {
 			meter.consume(T::WeightInfo::process_core_count(status.core_count.into()));
 		}
 
-		Self::set_market_status(status);
+		Status::<T>::put(status);
 
 		if Self::process_revenue() {
 			meter.consume(T::WeightInfo::process_revenue());
@@ -63,18 +63,18 @@ impl<T: Config> Pallet<T> {
 		// Commit the timeslice workloads after market logic so that any Workplan
 		// entries created by sale rotation are available.
 		if let Some(timeslice) = commit_timeslice {
-			if let Some(mut status) = Self::market_status() {
+			if let Some(mut status) = Status::<T>::get() {
 				Self::timeslice_commited(timeslice, &mut status, &mut meter);
-				Self::set_market_status(status);
+				Status::<T>::put(status);
 			}
 		}
 
 		// Advance last_timeslice tracking.
-		if let Some(mut status) = Self::market_status() {
+		if let Some(mut status) = Status::<T>::get() {
 			if status.last_timeslice < Self::current_timeslice() {
 				status.last_timeslice.saturating_inc();
 				Self::last_timeslice_changed(&status, &mut meter);
-				Self::set_market_status(status);
+				Status::<T>::put(status);
 			}
 		}
 
@@ -85,11 +85,11 @@ impl<T: Config> Pallet<T> {
 	/// Returns the timeslice that was committed, if any.
 	fn advance_committed_timeslice() -> Option<Timeslice> {
 		let config = Self::market_configuration()?;
-		let mut status = Self::market_status()?;
+		let mut status = Status::<T>::get()?;
 
 		let commit_timeslice = Self::next_timeslice_to_commit(&config, &status)?;
 		status.last_committed_timeslice = commit_timeslice;
-		Self::set_market_status(status);
+		Status::<T>::put(status);
 
 		Some(commit_timeslice)
 	}
@@ -188,7 +188,11 @@ impl<T: Config> Pallet<T> {
 
 	pub(crate) fn process_market_logic(meter: &mut WeightMeter) {
 		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
-		let result = T::Market::tick(now, meter);
+		let Some(status) = Status::<T>::get() else {
+			return;
+		};
+		let result =
+			T::Market::tick(now, status.core_count, status.last_committed_timeslice, meter);
 
 		for action in result {
 			Self::process_tick_action(action, meter);
@@ -222,7 +226,7 @@ impl<T: Config> Pallet<T> {
 				Self::refund(&who, amount).defensive_ok();
 			},
 			TickAction::SaleRotated { old_sale, new_sale, new_prices, .. } => {
-				if let Some(status) = Self::market_status() {
+				if let Some(status) = Status::<T>::get() {
 					meter.consume(T::WeightInfo::process_tick_action_sale_rotated(
 						status.core_count.into(),
 					));

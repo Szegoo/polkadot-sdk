@@ -197,6 +197,10 @@ pub mod pallet {
 	pub type InstaPoolHistory<T> =
 		StorageMap<_, Blake2_128Concat, Timeslice, InstaPoolHistoryRecordOf<T>>;
 
+	/// The system status. Tracks core count, pool sizes, and timeslice progress.
+	#[pallet::storage]
+	pub type Status<T> = StorageValue<_, StatusRecord, OptionQuery>;
+
 	/// Received core count change from the relay chain.
 	#[pallet::storage]
 	pub type CoreCountInbox<T> = StorageValue<_, CoreIndex, OptionQuery>;

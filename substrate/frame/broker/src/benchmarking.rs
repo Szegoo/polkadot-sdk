@@ -783,7 +783,7 @@ mod benches {
 
 		CoreCountInbox::<T>::put(core_count);
 
-		let mut status = Broker::<T>::market_status().ok_or(BenchmarkError::Weightless)?;
+		let mut status = Status::<T>::get().ok_or(BenchmarkError::Weightless)?;
 
 		#[block]
 		{
@@ -890,16 +890,16 @@ mod benches {
 
 		advance_to::<T>(5);
 
-		let mut status = Broker::<T>::market_status().unwrap();
+		let mut status = Status::<T>::get().unwrap();
 		status.last_committed_timeslice = 3;
-		Broker::<T>::set_market_status(status.clone());
+		Status::<T>::put(status.clone());
 
 		#[block]
 		{
 			Broker::<T>::do_tick();
 		}
 
-		let updated_status = Broker::<T>::market_status().unwrap();
+		let updated_status = Status::<T>::get().unwrap();
 		assert_eq!(status, updated_status);
 
 		Ok(())
@@ -923,7 +923,7 @@ mod benches {
 			.map_err(|_| BenchmarkError::Weightless)?;
 
 		// Add a core.
-		let core_count = Broker::<T>::market_status().unwrap().core_count;
+		let core_count = Status::<T>::get().unwrap().core_count;
 		Broker::<T>::do_request_core_count(core_count + 1).unwrap();
 
 		advance_to::<T>(T::TimeslicePeriod::get().try_into().ok().unwrap());
@@ -1271,15 +1271,17 @@ mod benches {
 		// Advance one block and manually tick so we can isolate the `rotate_sale` call.
 		System::<T>::set_block_number(rotate_block.into());
 		RCBlockNumberProviderOf::<T::Coretime>::set_block_number(rotate_block.into());
-		let mut status = Broker::<T>::market_status().expect("Sale has started.");
+		let mut status = Status::<T>::get().expect("Sale has started.");
 		Broker::<T>::process_core_count(&mut status);
 		Broker::<T>::process_revenue();
 		status.last_committed_timeslice = config.region_length();
-		Broker::<T>::set_market_status(status);
+		let core_count = status.core_count;
+		let last_committed_timeslice = status.last_committed_timeslice;
+		Status::<T>::put(status);
 
 		let block = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
 		let mut setup_meter = WeightMeter::new();
-		let action = T::Market::tick(block, &mut setup_meter)
+		let action = T::Market::tick(block, core_count, last_committed_timeslice, &mut setup_meter)
 			.into_iter()
 			.find(|action| matches!(action, TickAction::SaleRotated { .. }))
 			.ok_or(BenchmarkError::Weightless)?;

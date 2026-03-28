@@ -19,7 +19,7 @@
 
 use crate::{
 	dispatchable_impls::DoRenewResult,
-	market::{ConfigRecord, Configuration, SaleInfo, SaleInfoRecord, Status},
+	market::{ConfigRecord, Configuration, SaleInfo, SaleInfoRecord},
 	mock::*, *,
 };
 use frame_support::{

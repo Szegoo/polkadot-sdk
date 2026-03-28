@@ -75,7 +75,7 @@ impl<T: Config> Pallet<T> {
 
 		// Assign now until the next sale boundary unless the next timeslice is already the sale
 		// boundary.
-		let status = Self::market_status().ok_or(Error::<T>::Uninitialized)?;
+		let status = Status::<T>::get().ok_or(Error::<T>::Uninitialized)?;
 		let timeslice = status.last_committed_timeslice.saturating_add(1);
 		if timeslice < sale.region_begin() {
 			Workplan::<T>::insert((timeslice, core), &workload);
@@ -107,20 +107,30 @@ impl<T: Config> Pallet<T> {
 		reserve_price: BalanceOf<T>,
 		extra_cores: CoreIndex,
 	) -> DispatchResult {
-		// Determine the core count
 		let core_count = Leases::<T>::decode_len().unwrap_or(0) as CoreIndex +
 			Reservations::<T>::decode_len().unwrap_or(0) as CoreIndex +
 			extra_cores;
 
 		Self::do_request_core_count(core_count)?;
 
+		let config = Self::market_configuration().ok_or(Error::<T>::Uninitialized)?;
 		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
+		let commit_timeslice = Self::latest_timeslice_ready_to_commit(&config);
+
+		let status = StatusRecord {
+			core_count,
+			private_pool_size: 0,
+			system_pool_size: 0,
+			last_committed_timeslice: commit_timeslice.saturating_sub(1),
+			last_timeslice: Self::current_timeslice(),
+		};
+		Status::<T>::put(status.clone());
+
 		let sales_started =
 			T::Market::start_sales(now, reserve_price, core_count).map_err(Into::into)?;
 
 		Self::deposit_event(Event::<T>::SalesStarted { price: reserve_price, core_count });
 
-		let status = Self::market_status().ok_or(Error::<T>::Uninitialized)?;
 		Self::rotate_sale(
 			&sales_started.old_sale,
 			&sales_started.new_sale,
@@ -168,7 +178,8 @@ impl<T: Config> Pallet<T> {
 			record.completion.drain_complete().ok_or(Error::<T>::IncompleteAssignment)?;
 
 		let now = RCBlockNumberProviderOf::<T::Coretime>::current_block_number();
-		match T::Market::place_renewal_order(now, &who, renewal_id, record.price)
+		let status = Status::<T>::get().ok_or(Error::<T>::Uninitialized)?;
+		match T::Market::place_renewal_order(now, &who, renewal_id, record.price, status.core_count)
 			.map_err(Into::into)?
 		{
 			RenewalOrderResult::BidPlaced { .. } => {
@@ -266,7 +277,7 @@ impl<T: Config> Pallet<T> {
 		maybe_check_owner: Option<T::AccountId>,
 		pivot_offset: Timeslice,
 	) -> Result<(RegionId, RegionId), Error<T>> {
-		let status = Self::market_status().ok_or(Error::<T>::Uninitialized)?;
+		let status = Status::<T>::get().ok_or(Error::<T>::Uninitialized)?;
 		let mut region = Regions::<T>::get(&region_id).ok_or(Error::<T>::UnknownRegion)?;
 
 		if let Some(check_owner) = maybe_check_owner {
@@ -298,7 +309,7 @@ impl<T: Config> Pallet<T> {
 		maybe_check_owner: Option<T::AccountId>,
 		pivot: CoreMask,
 	) -> Result<(RegionId, RegionId), Error<T>> {
-		let status = Self::market_status().ok_or(Error::<T>::Uninitialized)?;
+		let status = Status::<T>::get().ok_or(Error::<T>::Uninitialized)?;
 		let region = Regions::<T>::get(&region_id).ok_or(Error::<T>::UnknownRegion)?;
 
 		if let Some(check_owner) = maybe_check_owner {
@@ -334,7 +345,7 @@ impl<T: Config> Pallet<T> {
 		finality: Finality,
 	) -> Result<(), Error<T>> {
 		let config = Self::market_configuration().ok_or(Error::<T>::Uninitialized)?;
-		let status = Self::market_status().ok_or(Error::<T>::Uninitialized)?;
+		let status = Status::<T>::get().ok_or(Error::<T>::Uninitialized)?;
 
 		if let Some((region_id, region)) = Self::utilize(region_id, maybe_check_owner, finality)? {
 			let workplan_key = (region_id.begin, region_id.core);
@@ -492,7 +503,7 @@ impl<T: Config> Pallet<T> {
 	}
 
 	pub(crate) fn do_drop_region(region_id: RegionId) -> DispatchResult {
-		let status = Self::market_status().ok_or(Error::<T>::Uninitialized)?;
+		let status = Status::<T>::get().ok_or(Error::<T>::Uninitialized)?;
 		let region = Regions::<T>::get(&region_id).ok_or(Error::<T>::UnknownRegion)?;
 		ensure!(status.last_committed_timeslice >= region.end, Error::<T>::StillValid);
 
@@ -504,7 +515,7 @@ impl<T: Config> Pallet<T> {
 
 	pub(crate) fn do_drop_contribution(region_id: RegionId) -> DispatchResult {
 		let config = Self::market_configuration().ok_or(Error::<T>::Uninitialized)?;
-		let status = Self::market_status().ok_or(Error::<T>::Uninitialized)?;
+		let status = Status::<T>::get().ok_or(Error::<T>::Uninitialized)?;
 		let contrib =
 			InstaPoolContribution::<T>::get(&region_id).ok_or(Error::<T>::UnknownContribution)?;
 		let end = region_id.begin.saturating_add(contrib.length);
@@ -519,7 +530,7 @@ impl<T: Config> Pallet<T> {
 
 	pub(crate) fn do_drop_history(when: Timeslice) -> DispatchResult {
 		let config = Self::market_configuration().ok_or(Error::<T>::Uninitialized)?;
-		let status = Self::market_status().ok_or(Error::<T>::Uninitialized)?;
+		let status = Status::<T>::get().ok_or(Error::<T>::Uninitialized)?;
 		ensure!(
 			status.last_timeslice > when.saturating_add(config.contribution_timeout()),
 			Error::<T>::StillValid
@@ -534,7 +545,7 @@ impl<T: Config> Pallet<T> {
 	}
 
 	pub(crate) fn do_drop_renewal(core: CoreIndex, when: Timeslice) -> DispatchResult {
-		let status = Self::market_status().ok_or(Error::<T>::Uninitialized)?;
+		let status = Status::<T>::get().ok_or(Error::<T>::Uninitialized)?;
 		ensure!(status.last_committed_timeslice >= when, Error::<T>::StillValid);
 		let id = PotentialRenewalId { core, when };
 		ensure!(PotentialRenewals::<T>::contains_key(id), Error::<T>::UnknownRenewal);

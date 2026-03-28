@@ -72,7 +72,7 @@ use sp_arithmetic::Perbill;
 use sp_coretime::{
 	AdaptedPrices, CoreCountProvider, CoreIndex, CoreMask, DisplacedBid, Market,
 	MarketConfig, MarketError, MarketSaleInfo, MarketState, OrderResult, PotentialRenewalId,
-	RegionId, RenewalOrderResult, RenewalRightsProvider, SalesStarted, StatusRecord, TickAction,
+	RegionId, RenewalOrderResult, RenewalRightsProvider, SalesStarted, TickAction,
 	Timeslice,
 };
 use sp_runtime::{
@@ -448,10 +448,6 @@ pub mod pallet {
 	#[pallet::storage]
 	pub type Configuration<T> = StorageValue<_, ConfigRecordOf<T>, OptionQuery>;
 
-	/// The coretime sale status. Updated by the broker via [`MarketState::set_status`].
-	#[pallet::storage]
-	pub type Status<T> = StorageValue<_, StatusRecord, OptionQuery>;
-
 	/// Information about the current sale.
 	#[pallet::storage]
 	pub type SaleInfo<T> = StorageValue<_, SaleInfoRecordOf<T>, OptionQuery>;
@@ -509,13 +505,6 @@ impl<T: Config> Market for Pallet<T> {
 		let config = Configuration::<T>::get().ok_or(MarketError::Uninitialized)?;
 
 		let commit_timeslice = latest_timeslice_ready_to_commit::<T>(block_number, &config);
-		let status = StatusRecord {
-			core_count,
-			private_pool_size: 0,
-			system_pool_size: 0,
-			last_committed_timeslice: commit_timeslice.saturating_sub(1),
-			last_timeslice: current_timeslice::<T>(block_number),
-		};
 
 		// Bootstrap with an imaginary previous sale.
 		let old_sale = SaleInfoRecord {
@@ -533,10 +522,9 @@ impl<T: Config> Market for Pallet<T> {
 
 		let reserved_cores = Self::CoreCount::reserved_core_count();
 		let (new_prices, new_sale) =
-			rotate_sale::<T>(&old_sale, &config, &status, reserved_cores, block_number);
+			rotate_sale::<T>(&old_sale, &config, core_count, reserved_cores, block_number);
 
 		SaleInfo::<T>::put(&new_sale);
-		Status::<T>::put(&status);
 		CurrentPhase::<T>::put(SalePhase::Market);
 
 		let start_price = new_sale.opening_price;
@@ -584,13 +572,13 @@ impl<T: Config> Market for Pallet<T> {
 	}
 
 	fn place_renewal_order(
-		block_number: RelayBlockNumberOf<T>,
+		_block_number: RelayBlockNumberOf<T>,
 		who: &T::AccountId,
 		_renewal: PotentialRenewalId,
 		_recorded_price: BalanceOf<T>,
+		core_count: CoreIndex,
 	) -> Result<RenewalOrderResult<Self::Balance, Self::BidId, Self::AccountId>, Self::Error> {
 		let config = Configuration::<T>::get().ok_or(MarketError::Uninitialized)?;
-		let status = Status::<T>::get().ok_or(MarketError::Uninitialized)?;
 		let sale = SaleInfo::<T>::get().ok_or(MarketError::NoSales)?;
 
 		match CurrentPhase::<T>::get().ok_or(MarketError::Uninitialized)? {
@@ -613,7 +601,7 @@ impl<T: Config> Market for Pallet<T> {
 
 				let allocated_count =
 					allocations.len() as u16 + RenewalCount::<T>::get() as u16;
-				let available = status.core_count.saturating_sub(sale.first_core);
+				let available = core_count.saturating_sub(sale.first_core);
 
 				if allocated_count < available {
 					// Unallocated core available — direct sale.
@@ -739,9 +727,11 @@ impl<T: Config> Market for Pallet<T> {
 
 	fn tick(
 		block_number: RelayBlockNumberOf<T>,
+		core_count: CoreIndex,
+		last_committed_timeslice: Timeslice,
 		weight_meter: &mut WeightMeter,
 	) -> Vec<TickActionOf<T>> {
-		let (Some(config), Some(status)) = (Configuration::<T>::get(), Status::<T>::get()) else {
+		let Some(config) = Configuration::<T>::get() else {
 			return vec![];
 		};
 		let Some(sale) = SaleInfo::<T>::get() else {
@@ -797,7 +787,7 @@ impl<T: Config> Market for Pallet<T> {
 				}
 			},
 			SalePhase::Settlement => {
-				if status.last_committed_timeslice >= sale.region_begin {
+				if last_committed_timeslice >= sale.region_begin {
 					if !weight_meter.can_consume(T::WeightInfo::rotate_sale()) {
 						return vec![];
 					}
@@ -807,7 +797,7 @@ impl<T: Config> Market for Pallet<T> {
 					let (new_prices, new_sale) = rotate_sale::<T>(
 						&sale,
 						&config,
-						&status,
+						core_count,
 						reserved_cores,
 						block_number,
 					);
@@ -855,14 +845,6 @@ impl<T: Config> MarketState for Pallet<T> {
 
 	fn set_configuration(config: ConfigRecordOf<T>) {
 		Configuration::<T>::put(config);
-	}
-
-	fn status() -> Option<StatusRecord> {
-		Status::<T>::get()
-	}
-
-	fn set_status(status: StatusRecord) {
-		Status::<T>::put(status);
 	}
 
 	fn sale_info() -> Option<SaleInfoRecordOf<T>> {
@@ -1183,7 +1165,7 @@ fn adjust_reserve_price<T: Config>(
 fn rotate_sale<T: Config>(
 	old_sale: &SaleInfoRecordOf<T>,
 	config: &ConfigRecordOf<T>,
-	status: &StatusRecord,
+	core_count: CoreIndex,
 	reserved_cores: CoreIndex,
 	now: RelayBlockNumberOf<T>,
 ) -> (AdaptedPrices<BalanceOf<T>>, SaleInfoRecordOf<T>) {
@@ -1193,7 +1175,7 @@ fn rotate_sale<T: Config>(
 		target_price: old_sale.clearing_price.unwrap_or(new_reserve),
 	};
 
-	let max_possible_sales = status.core_count.saturating_sub(reserved_cores);
+	let max_possible_sales = core_count.saturating_sub(reserved_cores);
 	let limit_cores_offered = config.limit_cores_offered.unwrap_or(CoreIndex::max_value());
 	let cores_offered = limit_cores_offered.min(max_possible_sales);
 	let ideal_cores_sold = (config.ideal_bulk_proportion * cores_offered as u32) as u16;

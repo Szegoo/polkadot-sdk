@@ -36,14 +36,6 @@ impl<T: Config> Pallet<T> {
 		T::Market::set_configuration(config);
 	}
 
-	pub fn market_status() -> Option<StatusRecord> {
-		T::Market::status()
-	}
-
-	pub fn set_market_status(status: StatusRecord) {
-		T::Market::set_status(status);
-	}
-
 	pub fn market_sale_info() -> Option<SaleInfoRecordOf<T>> {
 		T::Market::sale_info()
 	}
@@ -121,7 +113,7 @@ impl<T: Config> Pallet<T> {
 		maybe_check_owner: Option<T::AccountId>,
 		finality: Finality,
 	) -> Result<Option<(RegionId, RegionRecordOf<T>)>, Error<T>> {
-		let status = Self::market_status().ok_or(Error::<T>::Uninitialized)?;
+		let status = Status::<T>::get().ok_or(Error::<T>::Uninitialized)?;
 		let region = Regions::<T>::get(&region_id).ok_or(Error::<T>::UnknownRegion)?;
 
 		if let Some(check_owner) = maybe_check_owner {

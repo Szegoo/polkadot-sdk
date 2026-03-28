@@ -26,13 +26,24 @@ use sp_coretime::{
 	CoreMask, Market, MarketError, MarketState, OrderResult, PotentialRenewalId,
 	RenewalOrderResult, TickAction,
 };
+/// Default core count used in most tests (matches `start_sales(100, 2)`).
+const DEFAULT_CORE_COUNT: u16 = 2;
+
 fn start_sales(reserve_price: u64, extra_cores: u16) {
 	assert_ok!(CoretimeMarket::start_sales(0, reserve_price, extra_cores));
 }
 
 fn tick(block_number: u64) -> Vec<TickAction<u64, u64, SaleInfoRecord<u64, u64>>> {
+	tick_with(block_number, DEFAULT_CORE_COUNT, 0)
+}
+
+fn tick_with(
+	block_number: u64,
+	core_count: u16,
+	last_committed_timeslice: u32,
+) -> Vec<TickAction<u64, u64, SaleInfoRecord<u64, u64>>> {
 	let mut meter = WeightMeter::new();
-	CoretimeMarket::tick(block_number, &mut meter)
+	CoretimeMarket::tick(block_number, core_count, last_committed_timeslice, &mut meter)
 }
 
 fn place_bid(
@@ -51,7 +62,9 @@ fn place_renewal(
 	recorded_price: u64,
 ) -> Result<RenewalOrderResult<u64, u32, u64>, MarketError> {
 	let renewal_id = PotentialRenewalId { core, when };
-	CoretimeMarket::place_renewal_order(block_number, &who, renewal_id, recorded_price)
+	CoretimeMarket::place_renewal_order(
+		block_number, &who, renewal_id, recorded_price, DEFAULT_CORE_COUNT,
+	)
 }
 
 // ============================================================================
@@ -127,12 +140,8 @@ fn settlement_to_market_transition_on_rotation() {
 		tick(renewal_end);
 		assert_eq!(crate::CurrentPhase::<Test>::get(), Some(SalePhase::Settlement));
 
-		// Set last_committed_timeslice >= region_begin to trigger rotation.
-		let mut status = <CoretimeMarket as MarketState>::status().unwrap();
-		status.last_committed_timeslice = sale.region_begin;
-		<CoretimeMarket as MarketState>::set_status(status);
-
-		let actions = tick(renewal_end + 1);
+		// Pass last_committed_timeslice >= region_begin to trigger rotation.
+		let actions = tick_with(renewal_end + 1, DEFAULT_CORE_COUNT, sale.region_begin);
 		assert_eq!(crate::CurrentPhase::<Test>::get(), Some(SalePhase::Market));
 		assert!(actions.iter().any(|a| matches!(a, TickAction::SaleRotated { .. })));
 	});
@@ -855,12 +864,8 @@ fn sale_rotation_creates_new_sale_with_correct_parameters() {
 		tick(market_end);
 		tick(renewal_end);
 
-		let mut status = <CoretimeMarket as MarketState>::status().unwrap();
-		status.last_committed_timeslice = sale1.region_begin;
-		<CoretimeMarket as MarketState>::set_status(status);
-
 		let rotation_block = renewal_end + 1;
-		tick(rotation_block);
+		tick_with(rotation_block, DEFAULT_CORE_COUNT, sale1.region_begin);
 
 		let sale2 = <CoretimeMarket as MarketState>::sale_info().unwrap();
 		assert_eq!(sale2.region_begin, sale1.region_end);
@@ -897,11 +902,7 @@ fn sale_rotation_cleans_up_previous_state() {
 		assert!(crate::AuctionClearingPrice::<Test>::get().is_some());
 		assert!(crate::NextBidId::<Test>::get() > 0);
 
-		let mut status = <CoretimeMarket as MarketState>::status().unwrap();
-		status.last_committed_timeslice = sale.region_begin;
-		<CoretimeMarket as MarketState>::set_status(status);
-
-		tick(renewal_end + 1);
+		tick_with(renewal_end + 1, DEFAULT_CORE_COUNT, sale.region_begin);
 
 		// After rotation, previous sale state is cleaned up.
 		assert!(crate::AuctionClearingPrice::<Test>::get().is_none());
@@ -932,11 +933,7 @@ fn run_sale_cycle(num_bids: u32) -> SaleInfoRecord<u64, u64> {
 	tick(market_end);
 	tick(renewal_end);
 
-	let mut status = <CoretimeMarket as MarketState>::status().unwrap();
-	status.last_committed_timeslice = sale.region_begin;
-	<CoretimeMarket as MarketState>::set_status(status);
-
-	tick(renewal_end + 1);
+	tick_with(renewal_end + 1, DEFAULT_CORE_COUNT, sale.region_begin);
 
 	<CoretimeMarket as MarketState>::sale_info().unwrap()
 }
@@ -1100,11 +1097,7 @@ fn full_sale_lifecycle() {
 		assert_eq!(crate::CurrentPhase::<Test>::get(), Some(SalePhase::Settlement));
 
 		// --- Settlement => Next sale ---
-		let mut status = <CoretimeMarket as MarketState>::status().unwrap();
-		status.last_committed_timeslice = sale.region_begin;
-		<CoretimeMarket as MarketState>::set_status(status);
-
-		tick(renewal_end + 1);
+		tick_with(renewal_end + 1, DEFAULT_CORE_COUNT, sale.region_begin);
 		assert_eq!(crate::CurrentPhase::<Test>::get(), Some(SalePhase::Market));
 
 		let sale2 = <CoretimeMarket as MarketState>::sale_info().unwrap();
