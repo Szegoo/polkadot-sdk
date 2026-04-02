@@ -14,16 +14,17 @@
 // limitations under the License.
 
 use super::{
-	AccountId, AllPalletsWithSystem, Balance, Balances, ForeignAssets, ParachainInfo,
-	ParachainSystem, PolkadotXcm, Runtime, RuntimeCall, RuntimeEvent, RuntimeHoldReason,
-	RuntimeOrigin, WeightToFee, XcmpQueue,
+	assets::pusd::PUsdLocation, AccountId, AllPalletsWithSystem, AssetRate,
+	Assets as AssetsPallet, Balance, Balances, ParachainInfo, ParachainSystem, PolkadotXcm,
+	Runtime, RuntimeCall, RuntimeEvent, RuntimeHoldReason, RuntimeOrigin, WeightToFee, XcmpQueue,
 };
 use crate::{TransactionByteFee, CENTS};
 use frame_support::{
 	parameter_types,
 	traits::{
-		fungible::HoldConsideration, tokens::imbalance::ResolveTo, ConstU32, Contains, Equals,
-		Everything, LinearStoragePrice, Nothing,
+		fungible::{HoldConsideration, ItemOf},
+		tokens::{imbalance::ResolveTo, ConversionToAssetBalance},
+		ConstU32, Contains, Equals, Everything, LinearStoragePrice, Nothing,
 	},
 };
 use frame_system::EnsureRoot;
@@ -37,7 +38,7 @@ use parachains_common::{
 	TREASURY_PALLET_ID,
 };
 use polkadot_parachain_primitives::primitives::Sibling;
-use sp_runtime::traits::{AccountIdConversion, MaybeEquivalence, TryConvertInto};
+use sp_runtime::traits::AccountIdConversion;
 use testnet_parachains_constants::westend::locations::AssetHubLocation;
 use westend_runtime_constants::system_parachain::COLLECTIVES_ID;
 use xcm::latest::{prelude::*, WESTEND_GENESIS_HASH};
@@ -48,11 +49,11 @@ use xcm_builder::{
 	DenyRecursively, DenyReserveTransferToRelayChain, DenyThenTry, DescribeAllTerminal,
 	DescribeFamily, DescribeTerminus, EnsureXcmOrigin, FrameTransactionalProcessor,
 	FungibleAdapter, FungiblesAdapter, HashedDescription, IsConcrete, LocationAsSuperuser,
-	MatchedConvertedConcreteId, NoChecking, ParentAsSuperuser, ParentIsPreset,
-	RelayChainAsNative, SendXcmFeeToAccount, SiblingParachainAsNative,
-	SiblingParachainConvertsVia, SignedAccountId32AsNative, SignedToAccountId32,
-	SovereignSignedViaLocation, TakeWeightCredit, TrailingSetTopicAsId, UsingComponents,
-	WeightInfoBounds, WithComputedOrigin, WithUniqueTopic, XcmFeeManagerFromComponents,
+	NoChecking, ParentAsSuperuser, ParentIsPreset, RelayChainAsNative, SendXcmFeeToAccount,
+	SiblingParachainAsNative, SiblingParachainConvertsVia, SignedAccountId32AsNative,
+	SignedToAccountId32, SovereignSignedViaLocation, TakeWeightCredit, TrailingSetTopicAsId,
+	UsingComponents, WeightInfoBounds, WithComputedOrigin, WithUniqueTopic,
+	XcmFeeManagerFromComponents,
 };
 use xcm_executor::XcmExecutor;
 
@@ -69,11 +70,6 @@ parameter_types! {
 	pub const MaxInstructions: u32 = 100;
 	pub const MaxAssetsIntoHolding: u32 = 64;
 	pub FellowshipLocation: Location = Location::new(1, Parachain(COLLECTIVES_ID));
-	/// pUSD location as seen from People chain.
-	pub PUsdFromAssetHub: Location = Location::new(
-		1,
-		[Parachain(1000), PalletInstance(50), GeneralIndex(1984042)]
-	);
 	/// The asset ID for the asset that we use to pay for message delivery fees. Just WND.
 	pub FeeAssetId: AssetId = AssetId(RelayLocation::get());
 	/// The base fee for the message delivery fees.
@@ -129,38 +125,11 @@ pub type FungibleTransactor = FungibleAdapter<
 	(),
 >;
 
-/// Converts the pUSD XCM Location to the local u32 asset ID and back.
-pub struct PUsdLocationToAssetId;
-impl MaybeEquivalence<Location, u32> for PUsdLocationToAssetId {
-	fn convert(location: &Location) -> Option<u32> {
-		if *location == PUsdFromAssetHub::get() {
-			Some(1984042)
-		} else {
-			None
-		}
-	}
-	fn convert_back(id: &u32) -> Option<Location> {
-		if *id == 1984042 {
-			Some(PUsdFromAssetHub::get())
-		} else {
-			None
-		}
-	}
-}
-
-/// Matches pUSD from Asset Hub and converts to local (u32, Balance) pair.
-pub type PUsdConvertedConcreteId = MatchedConvertedConcreteId<
-	u32,
-	Balance,
-	Equals<PUsdFromAssetHub>,
-	PUsdLocationToAssetId,
-	TryConvertInto,
->;
-
-/// Means for transacting pUSD on this chain.
-pub type ForeignFungiblesTransactor = FungiblesAdapter<
-	ForeignAssets,
-	PUsdConvertedConcreteId,
+/// Means for transacting other fungible tokens on this chain.
+pub type FungiblesTransactor = FungiblesAdapter<
+	AssetsPallet,
+	// Match everything that comes from outside.
+	assets_common::ForeignAssetsConvertedConcreteId<(), Balance, Location>,
 	LocationToAccountId,
 	AccountId,
 	NoChecking,
@@ -168,7 +137,7 @@ pub type ForeignFungiblesTransactor = FungiblesAdapter<
 >;
 
 /// Combined asset transactor for WND (native) and pUSD (foreign).
-pub type AssetTransactor = (FungibleTransactor, ForeignFungiblesTransactor);
+pub type AssetTransactor = (FungibleTransactor, FungiblesTransactor);
 
 /// This is the type we use to convert an (incoming) XCM origin into a local `Origin` instance,
 /// ready for dispatching a transaction with XCM's `Transact`. There is an `OriginKind` that can
@@ -266,7 +235,7 @@ pub type WaivedLocations = (
 /// - pUSD from Asset Hub.
 pub type TrustedTeleporters = (
 	ConcreteAssetFromSystem<RelayLocation>,
-	ConcreteAssetFromSystem<PUsdFromAssetHub>,
+	ConcreteAssetFromSystem<PUsdLocation>,
 );
 
 /// Defines origin aliasing rules for this chain.
@@ -280,6 +249,41 @@ pub type TrustedAliasers = (
 	AliasAccountId32FromSiblingSystemChain,
 	AliasOriginRootUsingFilter<AssetHubLocation, Everything>,
 	AuthorizedAliasers<Runtime>,
+);
+
+pub type WeightToNativeFee = WeightToFee;
+pub struct WeightToStableFee;
+impl frame_support::weights::WeightToFee for WeightToStableFee {
+	type Balance = Balance;
+
+	fn weight_to_fee(weight: &Weight) -> Self::Balance {
+		let native_fee = WeightToNativeFee::weight_to_fee(weight);
+
+		AssetRate::to_asset_balance(native_fee, PUsdLocation::get())
+			// Using max value will make the payment fail and go to the next trader component.
+			.unwrap_or(Balance::MAX)
+	}
+}
+
+/// A fungible adapter for pUSD.
+pub type FungiblePUsd = ItemOf<AssetsPallet, PUsdLocation, AccountId>;
+
+/// All ways of paying for execution fees via XCM.
+pub type Traders = (
+	UsingComponents<
+		WeightToNativeFee,
+		RelayLocation,
+		AccountId,
+		Balances,
+		ResolveTo<StakingPotAccountId<Runtime>, Balances>,
+	>,
+	UsingComponents<
+		WeightToStableFee,
+		PUsdLocation,
+		AccountId,
+		FungiblePUsd,
+		ResolveTo<StakingPotAccountId<Runtime>, FungiblePUsd>,
+	>,
 );
 
 pub struct XcmConfig;
@@ -300,15 +304,7 @@ impl xcm_executor::Config for XcmConfig {
 		RuntimeCall,
 		MaxInstructions,
 	>;
-	// TODO: once DAP allocates collator budgets, redirect XCM execution fees to DAP satellite
-	// instead of StakingPot (use crate::DealWithFeesSatellite as the OnUnbalanced handler).
-	type Trader = UsingComponents<
-		WeightToFee,
-		RelayLocation,
-		AccountId,
-		Balances,
-		ResolveTo<StakingPotAccountId<Runtime>, Balances>,
-	>;
+	type Trader = Traders;
 	type ResponseHandler = PolkadotXcm;
 	type AssetTrap = PolkadotXcm;
 	type SubscriptionService = PolkadotXcm;
@@ -394,4 +390,14 @@ impl pallet_xcm::Config for Runtime {
 impl cumulus_pallet_xcm::Config for Runtime {
 	type RuntimeEvent = RuntimeEvent;
 	type XcmExecutor = XcmExecutor<XcmConfig>;
+}
+
+/// Simple conversion of `u32` into an `AssetId` for use in benchmarking.
+pub struct XcmBenchmarkHelper;
+#[cfg(feature = "runtime-benchmarks")]
+impl pallet_assets::BenchmarkHelper<Location, ()> for XcmBenchmarkHelper {
+	fn create_asset_id_parameter(id: u32) -> Location {
+		Location::new(1, Parachain(id))
+	}
+	fn create_reserve_id_parameter(_id: u32) {}
 }

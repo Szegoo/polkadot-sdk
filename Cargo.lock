@@ -15317,6 +15317,7 @@ dependencies = [
 name = "people-westend-runtime"
 version = "0.1.0"
 dependencies = [
+ "assets-common",
  "cumulus-pallet-aura-ext",
  "cumulus-pallet-parachain-system",
  "cumulus-pallet-session-benchmarking",
@@ -15335,7 +15336,10 @@ dependencies = [
  "frame-system-benchmarking",
  "frame-system-rpc-runtime-api",
  "frame-try-runtime",
+ "pallet-asset-rate",
+ "pallet-asset-tx-payment",
  "pallet-assets",
+ "pallet-assets-holder",
  "pallet-aura",
  "pallet-authorship",
  "pallet-balances",

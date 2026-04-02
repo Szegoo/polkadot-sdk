@@ -15,7 +15,7 @@
 
 //! # People Westend Runtime genesis config presets
 
-use crate::*;
+use crate::{assets::pusd, *};
 use alloc::{vec, vec::Vec};
 use cumulus_primitives_core::ParaId;
 use frame_support::{build_struct_json_patch, sp_runtime::traits::AccountIdConversion};
@@ -48,14 +48,14 @@ fn people_westend_genesis(
 				.chain(core::iter::once((dap_satellite_account(), PEOPLE_WESTEND_ED)))
 				.collect(),
 		},
-		foreign_assets: ForeignAssetsConfig {
+		assets: AssetsConfig {
 			assets: vec![(
-				1984042u32,
+				pusd::PUsdLocation::get(),
 				dap_satellite_account(),
 				true,  // is_sufficient
 				70_000, // min_balance (0.07 pUSD, same as USDT on Westend Asset Hub)
 			)],
-			metadata: vec![(1984042u32, b"pUSD".to_vec(), b"pUSD".to_vec(), 6)],
+			metadata: vec![(pusd::PUsdLocation::get(), b"pUSD".to_vec(), b"pUSD".to_vec(), 6)],
 			accounts: vec![],
 		},
 		parachain_info: ParachainInfoConfig { parachain_id: id },
