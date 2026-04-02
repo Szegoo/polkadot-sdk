@@ -269,6 +269,8 @@ impl frame_support::weights::WeightToFee for WeightToStableFee {
 pub type FungiblePUsd = ItemOf<AssetsPallet, PUsdLocation, AccountId>;
 
 /// All ways of paying for execution fees via XCM.
+// TODO: once DAP allocates collator budgets, redirect XCM execution fees to DAP satellite
+// instead of StakingPot (use crate::DealWithFeesSatellite as the OnUnbalanced handler).
 pub type Traders = (
 	UsingComponents<
 		WeightToNativeFee,
