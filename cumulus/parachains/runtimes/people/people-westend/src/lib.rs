@@ -692,7 +692,7 @@ mod benches {
 	frame_benchmarking::define_benchmarks!(
 		// Substrate
 		[frame_system, SystemBench::<Runtime>]
-		[pallet_assets, Assets]
+		[pallet_assets, crate::Assets]
 		[pallet_asset_rate, AssetRate]
 		[pallet_asset_tx_payment, AssetTxPayment]
 		[pallet_balances, Balances]
