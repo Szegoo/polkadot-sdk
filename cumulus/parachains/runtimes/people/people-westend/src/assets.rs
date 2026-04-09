@@ -160,7 +160,7 @@ pub mod pusd {
 	pub const ASSET_HUB_PARA_ID: u32 = 1000;
 
 	/// The pUSD asset ID on Asset Hub.
-	pub const PUSD_ASSET_ID: u128 = 1984042;
+	pub const PUSD_ASSET_ID: u128 = 50000342;
 
 	/// A unit of pUSD consists of 10^6 plancks.
 	pub const PUSD_UNITS: u128 = 1_000_000;

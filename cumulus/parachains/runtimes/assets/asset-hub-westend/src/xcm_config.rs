@@ -87,7 +87,7 @@ parameter_types! {
 		PalletInstance(<Uniques as PalletInfoAccess>::index() as u8).into();
 	pub PUsdLocation: Location = Location::new(
 		0,
-		[PalletInstance(TrustBackedAssetsPalletIndex::get()), GeneralIndex(1984042)]
+		[PalletInstance(TrustBackedAssetsPalletIndex::get()), GeneralIndex(50000342)]
 	);
 	pub CheckingAccount: AccountId = PolkadotXcm::check_account();
 	pub StakingPot: AccountId = CollatorSelection::account_id();

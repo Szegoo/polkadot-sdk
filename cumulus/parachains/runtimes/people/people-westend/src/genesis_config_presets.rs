@@ -53,7 +53,7 @@ fn people_westend_genesis(
 				pusd::PUsdLocation::get(),
 				dap_satellite_account(),
 				true,  // is_sufficient
-				70_000, // min_balance (0.07 pUSD, same as USDT on Westend Asset Hub)
+				10_000, // min_balance (0.01 pUSD)
 			)],
 			metadata: vec![(pusd::PUsdLocation::get(), b"pUSD".to_vec(), b"pUSD".to_vec(), 6)],
 			accounts: vec![],

@@ -1,0 +1,26 @@
+title: 'Westend People chain: Add pUSD support'
+doc:
+- audience: Runtime Dev
+  description: |-
+    Configures the Westend People chain to receive, hold, and pay fees in pUSD,
+    matching the HOLLAR setup on Polkadot People chain from the fellowship runtimes repo.
+
+    Changes:
+    - Adds `pallet-assets` with `AssetId = Location` for pUSD storage
+    - Adds `pallet-asset-tx-payment` and `pallet-asset-rate` to enable transaction
+      fee payment in pUSD
+    - Adds `pallet-assets-holder` for asset hold/freeze functionality
+    - Replaces `ChargeTransactionPayment` with `ChargeAssetTxPayment` in `TxExtension`
+      to support both native WND and pUSD fee payment
+    - Adds dual XCM traders: native WND and pUSD (via `WeightToStableFee` using
+      `pallet-asset-rate` conversion)
+    - Extends `TrustedTeleporters` to accept pUSD teleports from Asset Hub
+    - Registers pUSD as a sufficient asset in genesis (min balance 0.01 pUSD)
+    - Extends Asset Hub Westend `TrustedTeleporters` to trust pUSD teleports back
+      from system parachains
+
+crates:
+- name: people-westend-runtime
+  bump: major
+- name: asset-hub-westend-runtime
+  bump: minor
