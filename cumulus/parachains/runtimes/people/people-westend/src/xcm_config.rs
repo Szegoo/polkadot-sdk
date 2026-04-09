@@ -14,9 +14,9 @@
 // limitations under the License.
 
 use super::{
-	assets::pusd::PUsdLocation, AccountId, AllPalletsWithSystem, AssetRate,
-	Assets as AssetsPallet, Balance, Balances, ParachainInfo, ParachainSystem, PolkadotXcm,
-	Runtime, RuntimeCall, RuntimeEvent, RuntimeHoldReason, RuntimeOrigin, WeightToFee, XcmpQueue,
+	assets::pusd::PUsdLocation, AccountId, AllPalletsWithSystem, AssetRate, Assets as AssetsPallet,
+	Balance, Balances, ParachainInfo, ParachainSystem, PolkadotXcm, Runtime, RuntimeCall,
+	RuntimeEvent, RuntimeHoldReason, RuntimeOrigin, WeightToFee, XcmpQueue,
 };
 use crate::{TransactionByteFee, CENTS};
 use frame_support::{
@@ -233,10 +233,8 @@ pub type WaivedLocations = (
 /// Cases where a remote origin is accepted as trusted Teleporter for a given asset:
 /// - WND with the parent Relay Chain and sibling parachains.
 /// - pUSD from Asset Hub.
-pub type TrustedTeleporters = (
-	ConcreteAssetFromSystem<RelayLocation>,
-	ConcreteAssetFromSystem<PUsdLocation>,
-);
+pub type TrustedTeleporters =
+	(ConcreteAssetFromSystem<RelayLocation>, ConcreteAssetFromSystem<PUsdLocation>);
 
 /// Defines origin aliasing rules for this chain.
 ///
