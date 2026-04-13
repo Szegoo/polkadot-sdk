@@ -63,10 +63,10 @@ const SUP_MEDIUM_SPENDER: Curve =
 	Curve::make_reciprocal(16, 28, percent(1), percent(0), percent(50));
 const APP_BIG_SPENDER: Curve = Curve::make_linear(28, 28, percent(50), percent(100));
 const SUP_BIG_SPENDER: Curve = Curve::make_reciprocal(20, 28, percent(1), percent(0), percent(50));
-const APP_PSM_EMERGENCY: Curve =
+const APP_MONETARY_GUARD: Curve =
 	Curve::make_reciprocal(4, 28, percent(80), percent(50), percent(100));
-const SUP_PSM_EMERGENCY: Curve =
-	Curve::make_reciprocal(1, 28, percent(10), percent(0), percent(50));
+const SUP_MONETARY_GUARD: Curve =
+	Curve::make_reciprocal(1, 28, percent(20), percent(5), percent(50));
 const APP_WHITELISTED_CALLER: Curve =
 	Curve::make_reciprocal(16, 28 * 24, percent(96), percent(50), percent(100));
 const SUP_WHITELISTED_CALLER: Curve =
@@ -188,15 +188,15 @@ const TRACKS_DATA: [pallet_referenda::Track<u16, Balance, BlockNumber>; 16] = [
 	pallet_referenda::Track {
 		id: 16,
 		info: pallet_referenda::TrackInfo {
-			name: s("psm_emergency"),
-			max_deciding: 1,
-			decision_deposit: 50 * GRAND,
-			prepare_period: 4 * MINUTES,
-			decision_period: 14 * MINUTES,
-			confirm_period: 8 * MINUTES,
-			min_enactment_period: 3 * MINUTES,
-			min_approval: APP_PSM_EMERGENCY,
-			min_support: SUP_PSM_EMERGENCY,
+			name: s("monetary_guard"),
+			max_deciding: 3,
+			decision_deposit: 200 * GRAND,
+			prepare_period: 8 * MINUTES,
+			decision_period: 20 * MINUTES,
+			confirm_period: 4 * MINUTES,
+			min_enactment_period: 1 * MINUTES,
+			min_approval: APP_MONETARY_GUARD,
+			min_support: SUP_MONETARY_GUARD,
 		},
 	},
 	pallet_referenda::Track {
@@ -325,7 +325,7 @@ impl pallet_referenda::TracksInfo<Balance, BlockNumber> for TracksInfo {
 				origins::Origin::FellowshipAdmin => Ok(13),
 				origins::Origin::GeneralAdmin => Ok(14),
 				origins::Origin::AuctionAdmin => Ok(15),
-				origins::Origin::PsmEmergency => Ok(16),
+				origins::Origin::MonetaryGuard => Ok(16),
 				// Referendum admins
 				origins::Origin::ReferendumCanceller => Ok(20),
 				origins::Origin::ReferendumKiller => Ok(21),

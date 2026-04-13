@@ -1504,8 +1504,8 @@ type PsmStableAsset =
 	frame_support::traits::fungible::ItemOf<Assets, PsmStablecoinAssetId, AccountId>;
 
 /// EnsureOrigin for PSM management with privilege levels.
-/// - Root and GeneralAdmin get Full privileges (all parameter changes).
-/// - PsmEmergency gets Emergency privileges (circuit breaker only).
+/// - Root gets Full privileges (all parameter changes).
+/// - MonetaryGuard gets Emergency privileges (circuit breaker only).
 pub struct EnsurePsmManager;
 impl frame_support::traits::EnsureOrigin<RuntimeOrigin> for EnsurePsmManager {
 	type Success = pallet_psm::PsmManagerLevel;
@@ -1516,13 +1516,8 @@ impl frame_support::traits::EnsureOrigin<RuntimeOrigin> for EnsurePsmManager {
 			Ok(frame_system::RawOrigin::Root) => return Ok(pallet_psm::PsmManagerLevel::Full),
 			_ => o,
 		};
-		// Try GeneralAdmin — full privileges.
-		let o = match GeneralAdmin::try_origin(o) {
-			Ok(_) => return Ok(pallet_psm::PsmManagerLevel::Full),
-			Err(o) => o,
-		};
-		// Try PsmEmergency — circuit breaker only.
-		pallet_custom_origins::PsmEmergency::try_origin(o)
+		// Try MonetaryGuard — circuit breaker only.
+		pallet_custom_origins::MonetaryGuard::try_origin(o)
 			.map(|_| pallet_psm::PsmManagerLevel::Emergency)
 	}
 
