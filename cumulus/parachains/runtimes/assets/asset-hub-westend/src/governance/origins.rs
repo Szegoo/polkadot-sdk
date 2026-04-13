@@ -64,6 +64,8 @@ pub mod pallet_custom_origins {
 		BigSpender,
 		/// Origin able to dispatch a whitelisted call.
 		WhitelistedCaller,
+		/// Origin for PSM emergency actions (circuit breaker).
+		PsmEmergency,
 	}
 
 	macro_rules! decl_unit_ensures {
@@ -106,6 +108,7 @@ pub mod pallet_custom_origins {
 		ReferendumCanceller,
 		ReferendumKiller,
 		WhitelistedCaller,
+		PsmEmergency,
 	);
 
 	macro_rules! decl_ensure {
