@@ -50,7 +50,7 @@ fn construct_extrinsic(
 			frame_system::Pallet::<Runtime>::account(&account_id).nonce,
 		),
 		frame_system::CheckWeight::<Runtime>::new(),
-		pallet_transaction_payment::ChargeTransactionPayment::<Runtime>::from(0),
+		pallet_asset_tx_payment::ChargeAssetTxPayment::<Runtime>::from(0, None),
 		frame_metadata_hash_extension::CheckMetadataHash::new(false),
 	)
 		.into();
