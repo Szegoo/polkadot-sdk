@@ -209,6 +209,61 @@ mod tests {
 	}
 
 	#[test]
+	fn pallet_storage_version_is_zero() {
+		use frame_support::traits::{GetStorageVersion, StorageVersion};
+		// The in-code storage version must be 0 so that BeforeAllRuntimeMigrations
+		// initializes the on-chain version to 0, allowing MigrateToV1 to run.
+		assert_eq!(Pallet::<Test>::in_code_storage_version(), StorageVersion::new(0));
+	}
+
+	#[test]
+	fn versioned_migration_runs_on_fresh_deployment() {
+		use frame_support::traits::{GetStorageVersion, OnRuntimeUpgrade, StorageVersion};
+
+		new_test_ext().execute_with(|| {
+			// Simulate fresh deployment: on-chain version is 0.
+			StorageVersion::new(0).put::<Pallet<Test>>();
+			assert_eq!(Pallet::<Test>::on_chain_storage_version(), StorageVersion::new(0));
+
+			// Run the versioned migration.
+			MigrateToV1::<Test, TestPsmConfig>::on_runtime_upgrade();
+
+			// Verify on-chain version is now 1.
+			assert_eq!(Pallet::<Test>::on_chain_storage_version(), StorageVersion::new(1));
+
+			// Verify the migration actually ran.
+			assert_eq!(MaxPsmDebtOfTotal::<Test>::get(), TestPsmConfig::max_psm_debt_of_total());
+			assert_eq!(
+				ExternalAssets::<Test>::get(USDC_ASSET_ID),
+				Some(CircuitBreakerLevel::AllEnabled)
+			);
+		});
+	}
+
+	#[test]
+	fn versioned_migration_skips_if_already_at_v1() {
+		use frame_support::traits::{GetStorageVersion, OnRuntimeUpgrade, StorageVersion};
+
+		new_test_ext().execute_with(|| {
+			// Simulate already-migrated state: on-chain version is 1.
+			StorageVersion::new(1).put::<Pallet<Test>>();
+
+			// Clear storage to verify migration doesn't re-populate it.
+			MaxPsmDebtOfTotal::<Test>::kill();
+			ExternalAssets::<Test>::remove(USDC_ASSET_ID);
+
+			MigrateToV1::<Test, TestPsmConfig>::on_runtime_upgrade();
+
+			// Version stays at 1.
+			assert_eq!(Pallet::<Test>::on_chain_storage_version(), StorageVersion::new(1));
+
+			// Storage was NOT re-populated — migration was skipped.
+			assert_eq!(MaxPsmDebtOfTotal::<Test>::get(), Permill::zero());
+			assert_eq!(ExternalAssets::<Test>::get(USDC_ASSET_ID), None);
+		});
+	}
+
+	#[test]
 	fn migration_v0_to_v1_works() {
 		new_test_ext().execute_with(|| {
 			MaxPsmDebtOfTotal::<Test>::kill();
