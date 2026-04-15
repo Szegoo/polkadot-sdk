@@ -1,0 +1,12 @@
+title: 'Fix PSM pallet storage version to allow V1 migration on fresh deployment'
+doc:
+- audience: Runtime Dev
+  description: |-
+    Fixes the PSM pallet's in-code storage version from 1 to 0 so that the V1
+    migration runs on first deployment. Previously, `BeforeAllRuntimeMigrations`
+    initialized the on-chain version to 1 (matching the in-code version), causing
+    `MigrateToV1` to be silently skipped.
+
+crates:
+- name: pallet-psm
+  bump: patch
