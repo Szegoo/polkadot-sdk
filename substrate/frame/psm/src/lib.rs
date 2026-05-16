@@ -17,8 +17,9 @@
 
 //! # Peg Stability Module (PSM) Pallet
 //!
-//! A module enabling 1:1 swaps between the runtime's internal stablecoin and pre-approved
-//! external stablecoins.
+//! A module enabling 1:1 swaps between runtime-local stablecoins (the *internal* assets) and
+//! pre-approved external stablecoins. Multiple independent PSM instances can be installed; each
+//! is keyed by the asset id of its internal stablecoin.
 //!
 //! ## Pallet API
 //!
@@ -29,22 +30,22 @@
 //!
 //! Throughout this pallet two distinct token roles are referenced:
 //!
-//! * **Internal** — the stablecoin issued and burned by the PSM. It is a single asset configured
-//!   via [`Config::InternalAsset`] (e.g. a runtime's pUSD). Mint operations credit the user with
-//!   the internal asset; redeem operations burn it. Fees are collected in the internal asset and
-//!   forwarded to [`Config::FeeDestination`].
-//! * **External** — third-party stablecoins (e.g. USDC, USDT) approved via
-//!   [`Pallet::add_external_asset`] and held in reserve by the PSM. Users deposit external to mint
-//!   internal, and burn internal to redeem external. Multiple external assets can be approved
-//!   simultaneously, each identified by `asset_id`.
+//! * **Internal** — a stablecoin issued and burned by a PSM instance (e.g. a runtime's pUSD).
+//!   Each instance has its own internal asset, identified by `internal_asset`. Mint operations
+//!   credit the user with the internal asset; redeem operations burn it. Fees are collected in
+//!   the internal asset and forwarded to the instance's configured fee destination.
+//! * **External** — third-party stablecoins (e.g. USDC, USDT) approved on a PSM instance via
+//!   [`Pallet::add_external_asset`] and held in reserve by that instance. Users deposit external
+//!   to mint internal, and burn internal to redeem external. Multiple external assets can be
+//!   approved per instance, each identified by `asset_id`.
 //!
 //! ## Overview
 //!
-//! The PSM strengthens the internal asset's peg by providing arbitrage opportunities:
-//! - When the internal asset trades **above** $1: Users swap external stablecoins for the internal
-//!   asset and sell for profit
+//! A PSM strengthens its internal asset's peg by providing arbitrage opportunities:
+//! - When the internal asset trades **above** $1: Users swap external stablecoins for the
+//!   internal asset and sell for profit.
 //! - When the internal asset trades **below** $1: Users buy cheap internal asset and swap for
-//!   external stablecoins
+//!   external stablecoins.
 //!
 //! This creates a price corridor bounded by the minting and redemption fees.
 //!
@@ -52,31 +53,19 @@
 //!
 //! * **Minting**: Deposit external stablecoin → receive internal asset (minus fee)
 //! * **Redemption**: Burn internal asset → receive external stablecoin (minus fee)
-//! * **Reserve**: External stablecoin balance held by the PSM account (derived, not stored)
-//! * **PSM Debt**: Total internal asset minted through PSM, backed 1:1 by external stablecoins
-//! * **Circuit Breaker**: Emergency control to disable minting or all swaps
-//!
-//! ### Supported Assets
-//!
-//! The PSM supports multiple pre-approved external stablecoins (e.g., USDC, USDT).
-//! Each swap operation specifies which asset to use via the `asset_id` parameter.
-//!
-//! ### Fee Structure
-//!
-//! * **Minting Fee (`MintingFee`)**: Deducted from internal-asset output during minting
-//! * **Redemption Fee (`RedemptionFee`)**: Deducted from external stablecoin output during
-//!   redemption
-//!
-//! Fees are collected in the internal asset and transferred to [`Config::FeeDestination`].
+//! * **Reserve**: External stablecoin balance held by the instance's derived account
+//! * **PSM Debt**: Internal-asset issuance routed through PSM, backed 1:1 by external reserves
+//! * **Circuit Breaker**: Emergency control to disable minting or all swaps for a given
+//!   (internal, external) pair
 //!
 //! ### Example
 //!
 //! ```ignore
-//! // Mint internal asset by depositing USDC
-//! Psm::mint(RuntimeOrigin::signed(user), USDC_ASSET_ID, 1000 * UNIT)?;
+//! // Mint pUSD by depositing USDC.
+//! Psm::mint(RuntimeOrigin::signed(user), PUSD_ID, USDC_ID, 1000 * UNIT)?;
 //!
-//! // Redeem USDC by burning the internal asset
-//! Psm::redeem(RuntimeOrigin::signed(user), USDC_ASSET_ID, 1000 * UNIT)?;
+//! // Redeem USDC by burning pUSD.
+//! Psm::redeem(RuntimeOrigin::signed(user), PUSD_ID, USDC_ID, 1000 * UNIT)?;
 //! ```
 
 #![cfg_attr(not(feature = "std"), no_std)]
@@ -98,14 +87,14 @@ pub use weights::WeightInfo;
 
 /// Helper trait for benchmark setup.
 ///
-/// Provides a way to create an external asset with the correct metadata (decimals)
-/// for benchmarks, abstracting over the deposit requirements of the underlying
+/// Provides a way to create an asset with metadata (decimals) appropriate for use as a PSM
+/// internal or external asset, abstracting over the deposit requirements of the underlying
 /// asset pallet.
 #[cfg(feature = "runtime-benchmarks")]
 pub trait BenchmarkHelper<AssetId, AccountId> {
 	/// Get the asset ID for a given asset index.
 	fn get_asset_id(asset_index: u32) -> AssetId;
-	/// Create an asset with metadata matching the internal asset's decimals.
+	/// Create an asset with the given decimals, owned by `owner`.
 	fn create_asset(asset_id: AssetId, owner: &AccountId, decimals: u8);
 }
 
@@ -113,15 +102,11 @@ pub trait BenchmarkHelper<AssetId, AccountId> {
 pub mod pallet {
 	pub use frame_support::traits::tokens::stable::PsmInterface;
 
-	use alloc::collections::btree_map::BTreeMap;
+	use alloc::{collections::btree_map::BTreeMap, vec::Vec};
 	use codec::DecodeWithMemTracking;
 	use frame_support::{
 		pallet_prelude::*,
 		traits::{
-			fungible::{
-				metadata::Inspect as FungibleMetadataInspect, Inspect as FungibleInspect,
-				Mutate as FungibleMutate,
-			},
 			fungibles::{
 				metadata::Inspect as FungiblesMetadataInspect, Inspect as FungiblesInspect,
 				Mutate as FungiblesMutate,
@@ -213,8 +198,8 @@ pub mod pallet {
 			true
 		}
 
-		/// Whether this level allows modifying the global PSM debt ratio.
-		pub const fn can_set_max_psm_debt(&self) -> bool {
+		/// Whether this level allows modifying the per-instance debt ceiling.
+		pub const fn can_set_max_debt(&self) -> bool {
 			matches!(self, PsmManagerLevel::Full)
 		}
 
@@ -247,17 +232,30 @@ pub mod pallet {
 	/// so realistic balances cannot overflow during conversion.
 	pub const MAX_DECIMALS_DIFF: u32 = 24;
 
+	/// On-chain record of a registered PSM instance.
+	#[derive(
+		Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo, Clone, PartialEq, Eq, Debug,
+	)]
+	#[scale_info(skip_type_params(T))]
+	pub struct PsmInfo<T: Config> {
+		/// Account receiving minting and redemption fees, denominated in the internal asset.
+		pub fee_destination: T::AccountId,
+		/// Absolute internal-asset debt ceiling for this instance.
+		pub max_debt: BalanceOf<T>,
+		/// Snapshot of the internal asset's decimals at registration time.
+		pub internal_decimals: u8,
+		/// Number of approved external assets attached to this instance.
+		pub external_count: u32,
+	}
+
 	#[pallet::config]
 	pub trait Config: frame_system::Config {
-		/// Fungibles implementation for both internal and external stablecoins.
+		/// Fungibles implementation backing both internal and external assets.
 		type Fungibles: FungiblesMutate<Self::AccountId, AssetId = Self::AssetId>
 			+ FungiblesMetadataInspect<Self::AccountId>;
 
 		/// Asset identifier type.
 		type AssetId: Parameter + Member + Clone + MaybeSerializeDeserialize + MaxEncodedLen + Ord;
-
-		/// Maximum allowed internal issuance across the entire system.
-		type MaximumIssuance: Get<BalanceOf<Self>>;
 
 		/// Origin allowed to update PSM parameters.
 		///
@@ -269,38 +267,25 @@ pub mod pallet {
 		/// A type representing the weights required by the dispatchables of this pallet.
 		type WeightInfo: WeightInfo;
 
-		/// The internal asset as a single-asset `fungible` type.
-		///
-		/// Typically `ItemOf<Asset, InternalAssetId, AccountId>`.
-		/// Must use the same `Balance` type as `Asset`.
-		type InternalAsset: FungibleMutate<Self::AccountId, Balance = BalanceOf<Self>>
-			+ FungibleMetadataInspect<Self::AccountId>;
-
-		/// Account that receives internal fees from minting and redemption.
-		///
-		/// Must exist before any swap; initialized at genesis and migration
-		/// via `Pallet::ensure_account_exists`.
-		type FeeDestination: Get<Self::AccountId>;
-
-		/// PalletId for deriving the PSM account.
+		/// PalletId for deriving each instance's reserve sub-account.
 		#[pallet::constant]
 		type PalletId: Get<PalletId>;
 
-		/// Minimum swap amount.
+		/// Minimum swap amount, expressed in internal-asset units.
 		#[pallet::constant]
 		type MinSwapAmount: Get<BalanceOf<Self>>;
 
-		/// Maximum number of approved external assets.
+		/// Maximum number of approved external assets per PSM instance.
 		#[pallet::constant]
-		type MaxExternalAssets: Get<u32>;
+		type MaxExternalAssetsPerPsm: Get<u32>;
 
-		/// Helper for benchmarks to create an external asset with correct metadata.
+		/// Helper for benchmarks to create an asset with correct metadata.
 		#[cfg(feature = "runtime-benchmarks")]
 		type BenchmarkHelper: crate::BenchmarkHelper<Self::AssetId, Self::AccountId>;
 	}
 
 	/// The in-code storage version.
-	const STORAGE_VERSION: StorageVersion = StorageVersion::new(2);
+	const STORAGE_VERSION: StorageVersion = StorageVersion::new(3);
 
 	#[pallet::pallet]
 	#[pallet::storage_version(STORAGE_VERSION)]
@@ -318,57 +303,98 @@ pub mod pallet {
 		}
 	}
 
-	/// internal minted through PSM per external asset, denominated in internal units.
+	/// Registered PSM instances, keyed by the internal asset id.
 	#[pallet::storage]
-	pub type PsmDebt<T: Config> =
-		StorageMap<_, Blake2_128Concat, T::AssetId, BalanceOf<T>, ValueQuery>;
+	pub type Psms<T: Config> =
+		StorageMap<_, Blake2_128Concat, T::AssetId, PsmInfo<T>, OptionQuery>;
 
-	/// Fee for external → internal swaps (minting) per asset. Suggested value is 0.5%.
+	/// Internal-asset debt minted through PSM, per `(internal, external)` pair.
 	#[pallet::storage]
-	pub(crate) type MintingFee<T: Config> =
-		StorageMap<_, Blake2_128Concat, T::AssetId, Permill, ValueQuery, DefaultFee>;
+	pub type PsmDebt<T: Config> = StorageDoubleMap<
+		_,
+		Blake2_128Concat,
+		T::AssetId,
+		Blake2_128Concat,
+		T::AssetId,
+		BalanceOf<T>,
+		ValueQuery,
+	>;
 
-	/// Fee for internal → external swaps (redemption) per asset. Suggested value is 0.5%.
+	/// Fee for external → internal swaps (minting), per `(internal, external)` pair.
+	/// Defaults to 0.5%.
 	#[pallet::storage]
-	pub(crate) type RedemptionFee<T: Config> =
-		StorageMap<_, Blake2_128Concat, T::AssetId, Permill, ValueQuery, DefaultFee>;
+	pub(crate) type MintingFee<T: Config> = StorageDoubleMap<
+		_,
+		Blake2_128Concat,
+		T::AssetId,
+		Blake2_128Concat,
+		T::AssetId,
+		Permill,
+		ValueQuery,
+		DefaultFee,
+	>;
 
-	/// Max PSM debt as percentage of MaximumIssuance (global ceiling).
+	/// Fee for internal → external swaps (redemption), per `(internal, external)` pair.
+	/// Defaults to 0.5%.
 	#[pallet::storage]
-	pub(crate) type MaxPsmDebtOfTotal<T: Config> = StorageValue<_, Permill, ValueQuery>;
+	pub(crate) type RedemptionFee<T: Config> = StorageDoubleMap<
+		_,
+		Blake2_128Concat,
+		T::AssetId,
+		Blake2_128Concat,
+		T::AssetId,
+		Permill,
+		ValueQuery,
+		DefaultFee,
+	>;
 
-	/// Per-asset ceiling weight. Weights are normalized against the sum of all weights.
-	/// Zero means minting is disabled for this asset.
+	/// Per-external ceiling weight on each PSM, normalised against the sum of weights within
+	/// the same instance. Zero means minting is disabled for that external.
 	#[pallet::storage]
-	pub(crate) type AssetCeilingWeight<T: Config> =
-		StorageMap<_, Blake2_128Concat, T::AssetId, Permill, ValueQuery>;
+	pub(crate) type AssetCeilingWeight<T: Config> = StorageDoubleMap<
+		_,
+		Blake2_128Concat,
+		T::AssetId,
+		Blake2_128Concat,
+		T::AssetId,
+		Permill,
+		ValueQuery,
+	>;
 
-	/// Set of approved external stablecoin asset IDs with their operational status.
-	/// Key existence indicates the asset is approved; the value is the circuit breaker level.
+	/// Approved external assets per PSM and their circuit breaker level.
 	#[pallet::storage]
-	pub(crate) type ExternalAssets<T: Config> =
-		CountedStorageMap<_, Blake2_128Concat, T::AssetId, CircuitBreakerLevel, OptionQuery>;
+	pub(crate) type ExternalAssets<T: Config> = StorageDoubleMap<
+		_,
+		Blake2_128Concat,
+		T::AssetId,
+		Blake2_128Concat,
+		T::AssetId,
+		CircuitBreakerLevel,
+		OptionQuery,
+	>;
 
-	/// Snapshot of each approved external asset's decimals at registration.
-	/// Used to detect runtime drift from the registered precision.
+	/// Snapshot of each approved external asset's decimals at registration time.
 	#[pallet::storage]
-	pub(crate) type ExternalDecimals<T: Config> =
-		StorageMap<_, Blake2_128Concat, T::AssetId, u8, OptionQuery>;
-
-	/// Snapshot of the internal asset's decimals taken at genesis.
-	/// Set once during genesis build; present for the lifetime of the pallet.
-	#[pallet::storage]
-	pub(crate) type InternalDecimals<T: Config> = StorageValue<_, u8, OptionQuery>;
+	pub(crate) type ExternalDecimals<T: Config> = StorageDoubleMap<
+		_,
+		Blake2_128Concat,
+		T::AssetId,
+		Blake2_128Concat,
+		T::AssetId,
+		u8,
+		OptionQuery,
+	>;
 
 	/// Genesis configuration for the PSM pallet.
 	#[pallet::genesis_config]
 	#[derive(DefaultNoBound)]
 	pub struct GenesisConfig<T: Config> {
-		/// Max PSM debt as percentage of total maximum issuance.
-		pub max_psm_debt_of_total: Permill,
-		/// Per-asset configuration: asset_id -> (minting_fee, redemption_fee,
-		/// ceiling_weight). Keys also define the set of approved external assets.
-		pub asset_configs: BTreeMap<T::AssetId, (Permill, Permill, Permill)>,
+		/// PSM instances to install at genesis:
+		/// `(internal_asset, fee_destination, max_debt)`.
+		pub psms: Vec<(T::AssetId, T::AccountId, BalanceOf<T>)>,
+		/// Per-external configuration for the installed instances:
+		/// `(internal_asset, external_asset, minting_fee, redemption_fee, ceiling_weight)`.
+		pub externals: Vec<(T::AssetId, T::AssetId, Permill, Permill, Permill)>,
 		#[serde(skip)]
 		pub _marker: core::marker::PhantomData<T>,
 	}
@@ -376,33 +402,50 @@ pub mod pallet {
 	#[pallet::genesis_build]
 	impl<T: Config> BuildGenesisConfig for GenesisConfig<T> {
 		fn build(&self) {
-			assert!(
-				self.asset_configs.len() as u32 <= T::MaxExternalAssets::get(),
-				"PSM genesis: asset_configs ({}) exceeds MaxExternalAssets ({})",
-				self.asset_configs.len(),
-				T::MaxExternalAssets::get(),
-			);
-			MaxPsmDebtOfTotal::<T>::put(self.max_psm_debt_of_total);
-			let internal_decimals = T::InternalAsset::decimals();
-			InternalDecimals::<T>::put(internal_decimals);
-			for (asset_id, (minting_fee, redemption_fee, ceiling_weight)) in &self.asset_configs {
-				let asset_decimals = T::Fungibles::decimals(asset_id.clone());
+			let mut external_counts: BTreeMap<T::AssetId, u32> = BTreeMap::new();
+			for (internal, external, mint_fee, redeem_fee, weight) in &self.externals {
+				assert!(
+					self.psms.iter().any(|(i, ..)| i == internal),
+					"PSM genesis: external configured for unregistered PSM instance",
+				);
+				let count = external_counts.entry(internal.clone()).or_insert(0);
+				*count = count.saturating_add(1);
+				assert!(
+					*count <= T::MaxExternalAssetsPerPsm::get(),
+					"PSM genesis: externals for an instance exceed MaxExternalAssetsPerPsm",
+				);
+				let asset_decimals = T::Fungibles::decimals(external.clone());
+				let internal_decimals = T::Fungibles::decimals(internal.clone());
 				let diff = asset_decimals.abs_diff(internal_decimals) as u32;
 				assert!(
 					diff <= MAX_DECIMALS_DIFF,
 					"PSM genesis: asset {:?} decimals diff ({}) exceeds MAX_DECIMALS_DIFF ({})",
-					asset_id,
+					external,
 					diff,
 					MAX_DECIMALS_DIFF,
 				);
-				ExternalAssets::<T>::insert(asset_id, CircuitBreakerLevel::AllEnabled);
-				ExternalDecimals::<T>::insert(asset_id, asset_decimals);
-				MintingFee::<T>::insert(asset_id, minting_fee);
-				RedemptionFee::<T>::insert(asset_id, redemption_fee);
-				AssetCeilingWeight::<T>::insert(asset_id, ceiling_weight);
+				ExternalAssets::<T>::insert(internal, external, CircuitBreakerLevel::AllEnabled);
+				ExternalDecimals::<T>::insert(internal, external, asset_decimals);
+				MintingFee::<T>::insert(internal, external, mint_fee);
+				RedemptionFee::<T>::insert(internal, external, redeem_fee);
+				AssetCeilingWeight::<T>::insert(internal, external, weight);
 			}
-			Pallet::<T>::ensure_account_exists(&Pallet::<T>::account_id());
-			Pallet::<T>::ensure_account_exists(&T::FeeDestination::get());
+			for (internal, fee_destination, max_debt) in &self.psms {
+				assert!(
+					!Psms::<T>::contains_key(internal),
+					"PSM genesis: duplicate instance",
+				);
+				let internal_decimals = T::Fungibles::decimals(internal.clone());
+				let info = PsmInfo::<T> {
+					fee_destination: fee_destination.clone(),
+					max_debt: *max_debt,
+					internal_decimals,
+					external_count: external_counts.get(internal).copied().unwrap_or(0),
+				};
+				Psms::<T>::insert(internal, info);
+				Pallet::<T>::ensure_account_exists(&Pallet::<T>::psm_account(internal));
+				Pallet::<T>::ensure_account_exists(fee_destination);
+			}
 		}
 	}
 
@@ -411,6 +454,7 @@ pub mod pallet {
 	pub enum Event<T: Config> {
 		/// User swapped external stablecoin for internal.
 		Minted {
+			internal_asset: T::AssetId,
 			who: T::AccountId,
 			asset_id: T::AssetId,
 			external_amount: BalanceOf<T>,
@@ -419,30 +463,56 @@ pub mod pallet {
 		},
 		/// User swapped internal for external stablecoin.
 		Redeemed {
+			internal_asset: T::AssetId,
 			who: T::AccountId,
 			asset_id: T::AssetId,
 			paid: BalanceOf<T>,
 			external_received: BalanceOf<T>,
 			fee: BalanceOf<T>,
 		},
-		/// Minting fee updated for an asset by governance.
-		MintingFeeUpdated { asset_id: T::AssetId, old_value: Permill, new_value: Permill },
-		/// Redemption fee updated for an asset by governance.
-		RedemptionFeeUpdated { asset_id: T::AssetId, old_value: Permill, new_value: Permill },
-		/// Max PSM debt ratio updated by governance.
-		MaxPsmDebtOfTotalUpdated { old_value: Permill, new_value: Permill },
-		/// Per-asset debt ceiling weight updated by governance.
-		AssetCeilingWeightUpdated { asset_id: T::AssetId, old_value: Permill, new_value: Permill },
+		/// Minting fee updated for an external on a PSM.
+		MintingFeeUpdated {
+			internal_asset: T::AssetId,
+			asset_id: T::AssetId,
+			old_value: Permill,
+			new_value: Permill,
+		},
+		/// Redemption fee updated for an external on a PSM.
+		RedemptionFeeUpdated {
+			internal_asset: T::AssetId,
+			asset_id: T::AssetId,
+			old_value: Permill,
+			new_value: Permill,
+		},
+		/// Per-instance debt ceiling updated.
+		MaxDebtUpdated {
+			internal_asset: T::AssetId,
+			old_value: BalanceOf<T>,
+			new_value: BalanceOf<T>,
+		},
+		/// Per-asset debt ceiling weight updated.
+		AssetCeilingWeightUpdated {
+			internal_asset: T::AssetId,
+			asset_id: T::AssetId,
+			old_value: Permill,
+			new_value: Permill,
+		},
 		/// Per-asset circuit breaker status updated.
-		AssetStatusUpdated { asset_id: T::AssetId, status: CircuitBreakerLevel },
-		/// An external asset was added to the approved list.
-		ExternalAssetAdded { asset_id: T::AssetId },
-		/// An external asset was removed from the approved list.
-		ExternalAssetRemoved { asset_id: T::AssetId },
+		AssetStatusUpdated {
+			internal_asset: T::AssetId,
+			asset_id: T::AssetId,
+			status: CircuitBreakerLevel,
+		},
+		/// An external asset was approved on a PSM.
+		ExternalAssetAdded { internal_asset: T::AssetId, asset_id: T::AssetId },
+		/// An external asset was removed from a PSM.
+		ExternalAssetRemoved { internal_asset: T::AssetId, asset_id: T::AssetId },
 	}
 
 	#[pallet::error]
 	pub enum Error<T> {
+		/// No PSM instance is registered for the given internal asset.
+		PsmNotFound,
 		/// PSM doesn't have enough external stablecoin for redemption.
 		InsufficientReserve,
 		/// Swap would exceed PSM debt ceiling.
@@ -455,8 +525,6 @@ pub mod pallet {
 		AllSwapsStopped,
 		/// Asset is not an approved external stablecoin.
 		UnsupportedAsset,
-		/// Mint would exceed system-wide maximum internal issuance.
-		ExceedsMaxIssuance,
 		/// Asset is already in the approved list.
 		AssetAlreadyApproved,
 		/// Asset does not exist.
@@ -483,95 +551,52 @@ pub mod pallet {
 
 	#[pallet::call]
 	impl<T: Config> Pallet<T> {
-		/// Swap external stablecoin for internal.
+		/// Swap external stablecoin for internal on a specific PSM instance.
 		///
 		/// ## Dispatch Origin
 		///
 		/// Must be `Signed` by the user performing the swap.
-		///
-		/// ## Details
-		///
-		/// Transfers `external_amount` of the specified external stablecoin from the caller
-		/// to the PSM account, then mints internal to the caller minus the minting fee.
-		/// The fee is calculated using ceiling rounding (`mul_ceil`), ensuring the
-		/// protocol never undercharges. The fee is transferred to [`Config::FeeDestination`].
-		///
-		/// ## Parameters
-		///
-		/// - `asset_id`: The external stablecoin to deposit (must be in `ExternalAssets`)
-		/// - `external_amount`: Amount of external stablecoin to deposit
-		///
-		/// ## Errors
-		///
-		/// - [`Error::UnsupportedAsset`]: If `asset_id` is not an approved external stablecoin
-		/// - [`Error::MintingStopped`]: If circuit breaker is at `MintingDisabled` or higher
-		/// - [`Error::BelowMinimumSwap`]: If `external_amount` is below [`Config::MinSwapAmount`]
-		/// - [`Error::ExceedsMaxIssuance`]: If minting would exceed system-wide internal issuance
-		///   cap
-		/// - [`Error::ExceedsMaxPsmDebt`]: If minting would exceed PSM debt ceiling (aggregate or
-		///   per-asset)
-		/// - [`Error::DecimalsMismatch`]: If the asset's decimals do not match the internal asset's
-		///   decimals
-		/// - [`Error::AmountTooSmallAfterConversion`]: if the conversion to the counter-asset
-		///   rounds to zero; swap would transfer nothing
-		///
-		/// ## Events
-		///
-		/// - [`Event::Minted`]: Emitted on successful mint
 		#[pallet::call_index(0)]
-		#[pallet::weight(T::WeightInfo::mint(T::MaxExternalAssets::get()))]
+		#[pallet::weight(T::WeightInfo::mint(T::MaxExternalAssetsPerPsm::get()))]
 		pub fn mint(
 			origin: OriginFor<T>,
+			internal_asset: T::AssetId,
 			asset_id: T::AssetId,
 			external_amount: BalanceOf<T>,
 		) -> DispatchResult {
 			let who = ensure_signed(origin)?;
+			let info = Psms::<T>::get(&internal_asset).ok_or(Error::<T>::PsmNotFound)?;
 
-			// Check asset is approved and minting is enabled
-			let asset_status =
-				ExternalAssets::<T>::get(&asset_id).ok_or(Error::<T>::UnsupportedAsset)?;
+			let asset_status = ExternalAssets::<T>::get(&internal_asset, &asset_id)
+				.ok_or(Error::<T>::UnsupportedAsset)?;
 			ensure!(asset_status.allows_minting(), Error::<T>::MintingStopped);
 
-			// Guard against runtime drift in live decimals.
-			let (ext_decimals, internal_decimals) = Self::ensure_decimals_match(asset_id.clone())?;
+			let (ext_decimals, internal_decimals) =
+				Self::ensure_decimals_match(&info, &internal_asset, &asset_id)?;
 
-			// Normalize to internal units for all internal accounting.
 			let internal_equivalent =
 				Self::external_to_internal(external_amount, ext_decimals, internal_decimals)?;
 			ensure!(!internal_equivalent.is_zero(), Error::<T>::AmountTooSmallAfterConversion);
 			ensure!(internal_equivalent >= T::MinSwapAmount::get(), Error::<T>::BelowMinimumSwap);
 
-			// Round-trip back to external units. Truncation dust stays in the user's wallet — only
-			// `effective_external` enters the reserve.
 			let effective_external =
 				Self::internal_to_external(internal_equivalent, ext_decimals, internal_decimals)?;
 
-			let fee = MintingFee::<T>::get(&asset_id).mul_ceil(internal_equivalent);
+			let fee = MintingFee::<T>::get(&internal_asset, &asset_id).mul_ceil(internal_equivalent);
 			let internal_to_user = internal_equivalent.saturating_sub(fee);
 
-			// Total new issuance = internal_to_user + fee = internal_equivalent.
-			let current_total_issuance = T::InternalAsset::total_issuance();
-			let max_issuance = T::MaximumIssuance::get();
+			let current_total_psm_debt = Self::total_psm_debt(&internal_asset);
 			ensure!(
-				current_total_issuance.saturating_add(internal_equivalent) <= max_issuance,
-				Error::<T>::ExceedsMaxIssuance
-			);
-
-			// Check aggregate PSM ceiling across all assets (internal units).
-			let current_total_psm_debt = Self::total_psm_debt();
-			let max_psm = Self::max_psm_debt();
-			ensure!(
-				current_total_psm_debt.saturating_add(internal_equivalent) <= max_psm,
+				current_total_psm_debt.saturating_add(internal_equivalent) <= info.max_debt,
 				Error::<T>::ExceedsMaxPsmDebt
 			);
 
-			// Check per-asset ceiling (redistributes from disabled assets).
-			let current_debt = PsmDebt::<T>::get(&asset_id);
-			let max_debt = Self::max_asset_debt(asset_id.clone());
+			let current_debt = PsmDebt::<T>::get(&internal_asset, &asset_id);
+			let max_debt = Self::max_asset_debt(&internal_asset, &asset_id, &info);
 			let new_debt = current_debt.saturating_add(internal_equivalent);
 			ensure!(new_debt <= max_debt, Error::<T>::ExceedsMaxPsmDebt);
 
-			let psm_account = Self::account_id();
+			let psm_account = Self::psm_account(&internal_asset);
 
 			T::Fungibles::transfer(
 				asset_id.clone(),
@@ -580,14 +605,15 @@ pub mod pallet {
 				effective_external,
 				Preservation::Expendable,
 			)?;
-			T::InternalAsset::mint_into(&who, internal_to_user)?;
+			T::Fungibles::mint_into(internal_asset.clone(), &who, internal_to_user)?;
 			if !fee.is_zero() {
-				T::InternalAsset::mint_into(&T::FeeDestination::get(), fee)?;
+				T::Fungibles::mint_into(internal_asset.clone(), &info.fee_destination, fee)?;
 			}
 
-			PsmDebt::<T>::insert(&asset_id, new_debt);
+			PsmDebt::<T>::insert(&internal_asset, &asset_id, new_debt);
 
 			Self::deposit_event(Event::Minted {
+				internal_asset,
 				who,
 				asset_id,
 				external_amount: effective_external,
@@ -598,69 +624,36 @@ pub mod pallet {
 			Ok(())
 		}
 
-		/// Swap internal for external stablecoin.
+		/// Swap internal for external stablecoin on a specific PSM instance.
 		///
 		/// ## Dispatch Origin
 		///
 		/// Must be `Signed` by the user performing the swap.
-		///
-		/// ## Details
-		///
-		/// Burns `amount` internal from the caller minus fee (transferred to
-		/// [`Config::FeeDestination`]), then transfers the resulting amount in external
-		/// stablecoin from PSM to the caller. The fee is calculated using ceiling rounding
-		/// (`mul_ceil`), ensuring the protocol never undercharges.
-		///
-		/// ## Parameters
-		///
-		/// - `asset_id`: The external stablecoin to receive (must be in `ExternalAssets`)
-		/// - `amount`: Amount of internal to redeem
-		///
-		/// ## Errors
-		///
-		/// - [`Error::UnsupportedAsset`]: If `asset_id` is not an approved external stablecoin
-		/// - [`Error::AllSwapsStopped`]: If circuit breaker is at `AllDisabled`
-		/// - [`Error::BelowMinimumSwap`]: If `amount` is below [`Config::MinSwapAmount`]
-		/// - [`Error::InsufficientReserve`]: If PSM has insufficient external stablecoin
-		/// - [`Error::DecimalsMismatch`]: If the asset's decimals do not match the internal asset's
-		///   decimals
-		/// - [`Error::AmountTooSmallAfterConversion`]: if the conversion to the counter-asset
-		///   rounds to zero; swap would transfer nothing
-		///
-		/// ## Events
-		///
-		/// - [`Event::Redeemed`]: Emitted on successful redemption
 		#[pallet::call_index(1)]
 		#[pallet::weight(T::WeightInfo::redeem())]
 		pub fn redeem(
 			origin: OriginFor<T>,
+			internal_asset: T::AssetId,
 			asset_id: T::AssetId,
 			amount: BalanceOf<T>,
 		) -> DispatchResult {
 			let who = ensure_signed(origin)?;
+			let info = Psms::<T>::get(&internal_asset).ok_or(Error::<T>::PsmNotFound)?;
 
-			// Check asset is approved and redemption is enabled
-			let asset_status =
-				ExternalAssets::<T>::get(&asset_id).ok_or(Error::<T>::UnsupportedAsset)?;
+			let asset_status = ExternalAssets::<T>::get(&internal_asset, &asset_id)
+				.ok_or(Error::<T>::UnsupportedAsset)?;
 			ensure!(asset_status.allows_redemption(), Error::<T>::AllSwapsStopped);
 
-			// Guard against runtime drift in live decimals.
-			let (ext_decimals, internal_decimals) = Self::ensure_decimals_match(asset_id.clone())?;
+			let (ext_decimals, internal_decimals) =
+				Self::ensure_decimals_match(&info, &internal_asset, &asset_id)?;
 
 			ensure!(amount >= T::MinSwapAmount::get(), Error::<T>::BelowMinimumSwap);
 
-			let fee = RedemptionFee::<T>::get(&asset_id).mul_ceil(amount);
+			let fee = RedemptionFee::<T>::get(&internal_asset, &asset_id).mul_ceil(amount);
 			let internal_net = amount.saturating_sub(fee);
 
-			// Convert internal-net to external units (floor) and round-trip back. The round-tripped
-			// amount (`effective_internal_net`) is what is actually burned and what the tracked
-			// debt decreases by. Any truncation dust stays in the caller's internal balance —
-			// symmetric with `mint`, which only takes the round-tripped share of the external
-			// amount from the caller.
 			let external_out =
 				Self::internal_to_external(internal_net, ext_decimals, internal_decimals)?;
-			// Reject only when truncation wipes a non-zero net amount; a legitimately zero net
-			// (e.g., 100% fee) continues without an external transfer.
 			ensure!(
 				internal_net.is_zero() || !external_out.is_zero(),
 				Error::<T>::AmountTooSmallAfterConversion
@@ -668,30 +661,28 @@ pub mod pallet {
 			let effective_internal_net =
 				Self::external_to_internal(external_out, ext_decimals, internal_decimals)?;
 
-			// Check debt first - redemptions are limited by tracked debt, not raw reserve.
-			// This prevents redemption of "donated" reserves that aren't backed by debt.
-			let current_debt = PsmDebt::<T>::get(&asset_id);
+			let current_debt = PsmDebt::<T>::get(&internal_asset, &asset_id);
 			ensure!(current_debt >= effective_internal_net, Error::<T>::InsufficientReserve);
 
-			let reserve = Self::get_reserve(asset_id.clone());
+			let reserve = Self::get_reserve(&internal_asset, &asset_id);
 			if reserve < external_out {
 				defensive!("PSM reserve is less than expected output amount");
 				return Err(Error::<T>::Unexpected.into());
 			}
 
-			// Transfer the nominal fee to the destination, then burn the redeemed portion.
-			// Round-trip dust is not charged.
 			if !fee.is_zero() {
-				T::InternalAsset::transfer(
+				T::Fungibles::transfer(
+					internal_asset.clone(),
 					&who,
-					&T::FeeDestination::get(),
+					&info.fee_destination,
 					fee,
 					Preservation::Expendable,
 				)?;
 			}
 
 			if !effective_internal_net.is_zero() {
-				T::InternalAsset::burn_from(
+				T::Fungibles::burn_from(
+					internal_asset.clone(),
 					&who,
 					effective_internal_net,
 					Preservation::Expendable,
@@ -700,7 +691,7 @@ pub mod pallet {
 				)?;
 			}
 
-			let psm_account = Self::account_id();
+			let psm_account = Self::psm_account(&internal_asset);
 			if !external_out.is_zero() {
 				T::Fungibles::transfer(
 					asset_id.clone(),
@@ -711,11 +702,12 @@ pub mod pallet {
 				)?;
 			}
 
-			PsmDebt::<T>::mutate(&asset_id, |debt| {
+			PsmDebt::<T>::mutate(&internal_asset, &asset_id, |debt| {
 				*debt = debt.saturating_sub(effective_internal_net);
 			});
 
 			Self::deposit_event(Event::Redeemed {
+				internal_asset,
 				who,
 				asset_id,
 				paid: effective_internal_net.saturating_add(fee),
@@ -726,63 +718,29 @@ pub mod pallet {
 			Ok(())
 		}
 
-		/// Set the minting fee for a specific asset (external → internal).
+		/// Set the minting fee for an `(internal, external)` pair.
 		///
 		/// ## Dispatch Origin
 		///
 		/// Must be [`Config::ManagerOrigin`].
-		///
-		/// ## Parameters
-		///
-		/// - `asset_id`: The external stablecoin to configure
-		/// - `fee`: The new minting fee as a Permill
-		///
-		/// ## Events
-		///
-		/// - [`Event::MintingFeeUpdated`]: Emitted with old and new values
 		#[pallet::call_index(2)]
 		#[pallet::weight(T::WeightInfo::set_minting_fee())]
 		pub fn set_minting_fee(
 			origin: OriginFor<T>,
+			internal_asset: T::AssetId,
 			asset_id: T::AssetId,
 			fee: Permill,
 		) -> DispatchResult {
 			let level = T::ManagerOrigin::ensure_origin(origin)?;
 			ensure!(level.can_set_fees(), Error::<T>::InsufficientPrivilege);
-			ensure!(ExternalAssets::<T>::contains_key(&asset_id), Error::<T>::AssetNotApproved);
-			let old_value = MintingFee::<T>::get(&asset_id);
-			MintingFee::<T>::insert(&asset_id, fee);
-			Self::deposit_event(Event::MintingFeeUpdated { asset_id, old_value, new_value: fee });
-			Ok(())
-		}
-
-		/// Set the redemption fee for a specific asset (internal → external).
-		///
-		/// ## Dispatch Origin
-		///
-		/// Must be [`Config::ManagerOrigin`].
-		///
-		/// ## Parameters
-		///
-		/// - `asset_id`: The external stablecoin to configure
-		/// - `fee`: The new redemption fee as a Permill
-		///
-		/// ## Events
-		///
-		/// - [`Event::RedemptionFeeUpdated`]: Emitted with old and new values
-		#[pallet::call_index(3)]
-		#[pallet::weight(T::WeightInfo::set_redemption_fee())]
-		pub fn set_redemption_fee(
-			origin: OriginFor<T>,
-			asset_id: T::AssetId,
-			fee: Permill,
-		) -> DispatchResult {
-			let level = T::ManagerOrigin::ensure_origin(origin)?;
-			ensure!(level.can_set_fees(), Error::<T>::InsufficientPrivilege);
-			ensure!(ExternalAssets::<T>::contains_key(&asset_id), Error::<T>::AssetNotApproved);
-			let old_value = RedemptionFee::<T>::get(&asset_id);
-			RedemptionFee::<T>::insert(&asset_id, fee);
-			Self::deposit_event(Event::RedemptionFeeUpdated {
+			ensure!(
+				ExternalAssets::<T>::contains_key(&internal_asset, &asset_id),
+				Error::<T>::AssetNotApproved
+			);
+			let old_value = MintingFee::<T>::get(&internal_asset, &asset_id);
+			MintingFee::<T>::insert(&internal_asset, &asset_id, fee);
+			Self::deposit_event(Event::MintingFeeUpdated {
+				internal_asset,
 				asset_id,
 				old_value,
 				new_value: fee,
@@ -790,63 +748,87 @@ pub mod pallet {
 			Ok(())
 		}
 
-		/// Set the maximum PSM debt as a percentage of total maximum issuance.
+		/// Set the redemption fee for an `(internal, external)` pair.
 		///
 		/// ## Dispatch Origin
 		///
 		/// Must be [`Config::ManagerOrigin`].
-		///
-		/// ## Events
-		///
-		/// - [`Event::MaxPsmDebtOfTotalUpdated`]: Emitted with old and new values
-		#[pallet::call_index(4)]
-		#[pallet::weight(T::WeightInfo::set_max_psm_debt())]
-		pub fn set_max_psm_debt(origin: OriginFor<T>, ratio: Permill) -> DispatchResult {
+		#[pallet::call_index(3)]
+		#[pallet::weight(T::WeightInfo::set_redemption_fee())]
+		pub fn set_redemption_fee(
+			origin: OriginFor<T>,
+			internal_asset: T::AssetId,
+			asset_id: T::AssetId,
+			fee: Permill,
+		) -> DispatchResult {
 			let level = T::ManagerOrigin::ensure_origin(origin)?;
-			ensure!(level.can_set_max_psm_debt(), Error::<T>::InsufficientPrivilege);
-			let old_value = MaxPsmDebtOfTotal::<T>::get();
-			MaxPsmDebtOfTotal::<T>::put(ratio);
-			Self::deposit_event(Event::MaxPsmDebtOfTotalUpdated { old_value, new_value: ratio });
+			ensure!(level.can_set_fees(), Error::<T>::InsufficientPrivilege);
+			ensure!(
+				ExternalAssets::<T>::contains_key(&internal_asset, &asset_id),
+				Error::<T>::AssetNotApproved
+			);
+			let old_value = RedemptionFee::<T>::get(&internal_asset, &asset_id);
+			RedemptionFee::<T>::insert(&internal_asset, &asset_id, fee);
+			Self::deposit_event(Event::RedemptionFeeUpdated {
+				internal_asset,
+				asset_id,
+				old_value,
+				new_value: fee,
+			});
 			Ok(())
 		}
 
-		/// Set the circuit breaker status for a specific external asset.
+		/// Set the absolute debt ceiling of a PSM instance.
 		///
 		/// ## Dispatch Origin
 		///
 		/// Must be [`Config::ManagerOrigin`].
+		#[pallet::call_index(4)]
+		#[pallet::weight(T::WeightInfo::set_max_debt())]
+		pub fn set_max_debt(
+			origin: OriginFor<T>,
+			internal_asset: T::AssetId,
+			max_debt: BalanceOf<T>,
+		) -> DispatchResult {
+			let level = T::ManagerOrigin::ensure_origin(origin)?;
+			ensure!(level.can_set_max_debt(), Error::<T>::InsufficientPrivilege);
+			Psms::<T>::try_mutate(&internal_asset, |maybe| -> DispatchResult {
+				let info = maybe.as_mut().ok_or(Error::<T>::PsmNotFound)?;
+				let old_value = info.max_debt;
+				info.max_debt = max_debt;
+				Self::deposit_event(Event::MaxDebtUpdated {
+					internal_asset: internal_asset.clone(),
+					old_value,
+					new_value: max_debt,
+				});
+				Ok(())
+			})
+		}
+
+		/// Set the circuit breaker status for an `(internal, external)` pair.
 		///
-		/// ## Details
+		/// ## Dispatch Origin
 		///
-		/// Controls which operations are allowed for this asset:
-		/// - [`CircuitBreakerLevel::AllEnabled`]: All swaps allowed
-		/// - [`CircuitBreakerLevel::MintingDisabled`]: Only redemptions allowed (useful for
-		///   draining debt)
-		/// - [`CircuitBreakerLevel::AllDisabled`]: No swaps allowed
-		///
-		/// ## Parameters
-		///
-		/// - `asset_id`: The external stablecoin to configure
-		/// - `status`: The new circuit breaker level for this asset
-		///
-		/// ## Errors
-		///
-		/// - [`Error::AssetNotApproved`]: If the asset is not in the approved list
-		///
-		/// ## Events
-		///
-		/// - [`Event::AssetStatusUpdated`]: Emitted with the asset ID and new status
+		/// Must be [`Config::ManagerOrigin`].
 		#[pallet::call_index(5)]
 		#[pallet::weight(T::WeightInfo::set_asset_status())]
 		pub fn set_asset_status(
 			origin: OriginFor<T>,
+			internal_asset: T::AssetId,
 			asset_id: T::AssetId,
 			status: CircuitBreakerLevel,
 		) -> DispatchResult {
 			T::ManagerOrigin::ensure_origin(origin)?;
-			ensure!(ExternalAssets::<T>::contains_key(&asset_id), Error::<T>::AssetNotApproved);
-			ExternalAssets::<T>::insert(&asset_id, status);
-			Self::deposit_event(Event::AssetStatusUpdated { asset_id, status });
+			ensure!(
+				ExternalAssets::<T>::contains_key(&internal_asset, &asset_id),
+				Error::<T>::AssetNotApproved
+			);
+			ExternalAssets::<T>::insert(&internal_asset, &asset_id, status);
+			Self::deposit_event(Event::AssetStatusUpdated {
+				internal_asset,
+				asset_id,
+				status,
+			});
 			Ok(())
 		}
 
@@ -855,36 +837,24 @@ pub mod pallet {
 		/// ## Dispatch Origin
 		///
 		/// Must be [`Config::ManagerOrigin`].
-		///
-		/// ## Details
-		///
-		/// Ratios act as weights normalized against the sum of all asset weights:
-		/// `max_asset_debt = (ratio / sum_of_all_ratios) * MaxPsmDebtOfTotal * MaximumIssuance`
-		///
-		/// With a single asset, the weight always normalizes to 100% of the PSM
-		/// ceiling.
-		///
-		/// ## Parameters
-		///
-		/// - `asset_id`: The external stablecoin to configure
-		/// - `ratio`: Weight for this asset's share of the total PSM ceiling
-		///
-		/// ## Events
-		///
-		/// - [`Event::AssetCeilingWeightUpdated`]: Emitted with old and new values
 		#[pallet::call_index(6)]
 		#[pallet::weight(T::WeightInfo::set_asset_ceiling_weight())]
 		pub fn set_asset_ceiling_weight(
 			origin: OriginFor<T>,
+			internal_asset: T::AssetId,
 			asset_id: T::AssetId,
 			weight: Permill,
 		) -> DispatchResult {
 			let level = T::ManagerOrigin::ensure_origin(origin)?;
 			ensure!(level.can_set_asset_ceiling(), Error::<T>::InsufficientPrivilege);
-			ensure!(ExternalAssets::<T>::contains_key(&asset_id), Error::<T>::AssetNotApproved);
-			let old_value = AssetCeilingWeight::<T>::get(&asset_id);
-			AssetCeilingWeight::<T>::insert(&asset_id, weight);
+			ensure!(
+				ExternalAssets::<T>::contains_key(&internal_asset, &asset_id),
+				Error::<T>::AssetNotApproved
+			);
+			let old_value = AssetCeilingWeight::<T>::get(&internal_asset, &asset_id);
+			AssetCeilingWeight::<T>::insert(&internal_asset, &asset_id, weight);
 			Self::deposit_event(Event::AssetCeilingWeightUpdated {
+				internal_asset,
 				asset_id,
 				old_value,
 				new_value: weight,
@@ -892,163 +862,153 @@ pub mod pallet {
 			Ok(())
 		}
 
-		/// Add an external stablecoin to the approved list.
+		/// Add an external stablecoin to a PSM's approved list.
 		///
 		/// ## Dispatch Origin
 		///
 		/// Must be [`Config::ManagerOrigin`].
-		///
-		/// ## Parameters
-		///
-		/// - `asset_id`: The external stablecoin to add
-		///
-		/// ## Errors
-		///
-		/// - [`Error::AssetAlreadyApproved`]: If the asset is already in the approved list
-		///
-		/// ## Events
-		///
-		/// - [`Event::ExternalAssetAdded`]: Emitted on successful addition
 		#[pallet::call_index(7)]
 		#[pallet::weight(T::WeightInfo::add_external_asset())]
-		pub fn add_external_asset(origin: OriginFor<T>, asset_id: T::AssetId) -> DispatchResult {
+		pub fn add_external_asset(
+			origin: OriginFor<T>,
+			internal_asset: T::AssetId,
+			asset_id: T::AssetId,
+		) -> DispatchResult {
 			let level = T::ManagerOrigin::ensure_origin(origin)?;
 			ensure!(level.can_manage_assets(), Error::<T>::InsufficientPrivilege);
-			ensure!(
-				!ExternalAssets::<T>::contains_key(&asset_id),
-				Error::<T>::AssetAlreadyApproved
-			);
-			ensure!(T::Fungibles::asset_exists(asset_id.clone()), Error::<T>::AssetDoesNotExist);
-			let count = ExternalAssets::<T>::count();
-			ensure!(count < T::MaxExternalAssets::get(), Error::<T>::TooManyAssets);
+			Psms::<T>::try_mutate(&internal_asset, |maybe| -> DispatchResult {
+				let info = maybe.as_mut().ok_or(Error::<T>::PsmNotFound)?;
+				ensure!(
+					!ExternalAssets::<T>::contains_key(&internal_asset, &asset_id),
+					Error::<T>::AssetAlreadyApproved
+				);
+				ensure!(
+					T::Fungibles::asset_exists(asset_id.clone()),
+					Error::<T>::AssetDoesNotExist
+				);
+				ensure!(
+					info.external_count < T::MaxExternalAssetsPerPsm::get(),
+					Error::<T>::TooManyAssets
+				);
 
-			let asset_decimals = T::Fungibles::decimals(asset_id.clone());
-			let internal_decimals = InternalDecimals::<T>::get().ok_or(Error::<T>::Unexpected)?;
-			ensure!(
-				T::InternalAsset::decimals() == internal_decimals,
-				Error::<T>::DecimalsMismatch
-			);
-			ensure!(
-				(asset_decimals.abs_diff(internal_decimals) as u32) <= MAX_DECIMALS_DIFF,
-				Error::<T>::DecimalsRangeExceeded
-			);
+				let asset_decimals = T::Fungibles::decimals(asset_id.clone());
+				ensure!(
+					T::Fungibles::decimals(internal_asset.clone()) == info.internal_decimals,
+					Error::<T>::DecimalsMismatch
+				);
+				ensure!(
+					(asset_decimals.abs_diff(info.internal_decimals) as u32) <= MAX_DECIMALS_DIFF,
+					Error::<T>::DecimalsRangeExceeded
+				);
 
-			ExternalAssets::<T>::insert(&asset_id, CircuitBreakerLevel::AllEnabled);
-			ExternalDecimals::<T>::insert(&asset_id, asset_decimals);
-			Self::deposit_event(Event::ExternalAssetAdded { asset_id });
-			Ok(())
+				ExternalAssets::<T>::insert(
+					&internal_asset,
+					&asset_id,
+					CircuitBreakerLevel::AllEnabled,
+				);
+				ExternalDecimals::<T>::insert(&internal_asset, &asset_id, asset_decimals);
+				info.external_count = info.external_count.saturating_add(1);
+				Self::deposit_event(Event::ExternalAssetAdded {
+					internal_asset: internal_asset.clone(),
+					asset_id,
+				});
+				Ok(())
+			})
 		}
 
-		/// Remove an external stablecoin from the approved list.
+		/// Remove an external stablecoin from a PSM's approved list.
 		///
 		/// ## Dispatch Origin
 		///
 		/// Must be [`Config::ManagerOrigin`].
-		///
-		/// ## Details
-		///
-		/// The asset cannot be removed if it has non-zero PSM debt outstanding.
-		/// This prevents orphaned debt that cannot be redeemed.
-		///
-		/// Upon removal, the associated configuration is also cleaned up:
-		/// - `MintingFee` for this asset
-		/// - `RedemptionFee` for this asset
-		/// - `AssetCeilingWeight` for this asset
-		///
-		/// ## Parameters
-		///
-		/// - `asset_id`: The external stablecoin to remove
-		///
-		/// ## Errors
-		///
-		/// - [`Error::AssetNotApproved`]: If the asset is not in the approved list
-		/// - [`Error::AssetHasDebt`]: If the asset has non-zero PSM debt
-		///
-		/// ## Events
-		///
-		/// - [`Event::ExternalAssetRemoved`]: Emitted on successful removal
 		#[pallet::call_index(8)]
 		#[pallet::weight(T::WeightInfo::remove_external_asset())]
-		pub fn remove_external_asset(origin: OriginFor<T>, asset_id: T::AssetId) -> DispatchResult {
+		pub fn remove_external_asset(
+			origin: OriginFor<T>,
+			internal_asset: T::AssetId,
+			asset_id: T::AssetId,
+		) -> DispatchResult {
 			let level = T::ManagerOrigin::ensure_origin(origin)?;
 			ensure!(level.can_manage_assets(), Error::<T>::InsufficientPrivilege);
-			ensure!(ExternalAssets::<T>::contains_key(&asset_id), Error::<T>::AssetNotApproved);
-			ensure!(PsmDebt::<T>::get(&asset_id).is_zero(), Error::<T>::AssetHasDebt);
-			ExternalAssets::<T>::remove(&asset_id);
-
-			// Clean up associated configuration
-			MintingFee::<T>::remove(&asset_id);
-			RedemptionFee::<T>::remove(&asset_id);
-			AssetCeilingWeight::<T>::remove(&asset_id);
-			ExternalDecimals::<T>::remove(&asset_id);
-			PsmDebt::<T>::remove(&asset_id);
-			Self::deposit_event(Event::ExternalAssetRemoved { asset_id });
-			Ok(())
+			Psms::<T>::try_mutate(&internal_asset, |maybe| -> DispatchResult {
+				let info = maybe.as_mut().ok_or(Error::<T>::PsmNotFound)?;
+				ensure!(
+					ExternalAssets::<T>::contains_key(&internal_asset, &asset_id),
+					Error::<T>::AssetNotApproved
+				);
+				ensure!(
+					PsmDebt::<T>::get(&internal_asset, &asset_id).is_zero(),
+					Error::<T>::AssetHasDebt
+				);
+				ExternalAssets::<T>::remove(&internal_asset, &asset_id);
+				MintingFee::<T>::remove(&internal_asset, &asset_id);
+				RedemptionFee::<T>::remove(&internal_asset, &asset_id);
+				AssetCeilingWeight::<T>::remove(&internal_asset, &asset_id);
+				ExternalDecimals::<T>::remove(&internal_asset, &asset_id);
+				PsmDebt::<T>::remove(&internal_asset, &asset_id);
+				info.external_count = info.external_count.saturating_sub(1);
+				Self::deposit_event(Event::ExternalAssetRemoved {
+					internal_asset: internal_asset.clone(),
+					asset_id,
+				});
+				Ok(())
+			})
 		}
 	}
 
 	impl<T: Config> Pallet<T> {
-		/// Get the PSM's derived account.
-		pub(crate) fn account_id() -> T::AccountId {
-			T::PalletId::get().into_account_truncating()
+		/// Derive the reserve account for a PSM instance.
+		pub fn psm_account(internal_asset: &T::AssetId) -> T::AccountId {
+			T::PalletId::get().into_sub_account_truncating(internal_asset)
 		}
 
-		/// Calculate max PSM debt based on system ceiling.
-		pub(crate) fn max_psm_debt() -> BalanceOf<T> {
-			let max_issuance = T::MaximumIssuance::get();
-			MaxPsmDebtOfTotal::<T>::get().mul_floor(max_issuance)
-		}
-
-		/// Calculate max debt for a specific asset.
+		/// Calculate max debt for a specific external on a PSM.
 		///
-		/// Assumes the caller has verified the asset is approved and `AllEnabled`.
-		///
-		/// Returns zero if the asset has no configured weight or the weight is zero.
-		///
-		/// Weights are normalized against the sum of all asset weights to fill the
-		/// PSM ceiling.
-		pub(crate) fn max_asset_debt(asset_id: T::AssetId) -> BalanceOf<T> {
-			let asset_weight = AssetCeilingWeight::<T>::get(asset_id);
+		/// Weights are normalised against the sum of all weights within the same PSM to fill
+		/// the instance's `max_debt` ceiling. Returns zero if the external has no configured
+		/// weight or weights sum to zero.
+		pub(crate) fn max_asset_debt(
+			internal_asset: &T::AssetId,
+			asset_id: &T::AssetId,
+			info: &PsmInfo<T>,
+		) -> BalanceOf<T> {
+			let asset_weight = AssetCeilingWeight::<T>::get(internal_asset, asset_id);
 
 			if asset_weight.is_zero() {
 				return BalanceOf::<T>::zero();
 			}
 
-			let total_weight_sum: u32 = AssetCeilingWeight::<T>::iter_values()
-				.map(|w| w.deconstruct())
+			let total_weight_sum: u32 = AssetCeilingWeight::<T>::iter_prefix(internal_asset)
+				.map(|(_, w)| w.deconstruct())
 				.fold(0u32, |acc, x| acc.saturating_add(x));
 
 			if total_weight_sum == 0 {
 				return BalanceOf::<T>::zero();
 			}
 
-			let total_psm_ceiling = Self::max_psm_debt();
 			Perbill::from_rational(asset_weight.deconstruct(), total_weight_sum)
-				.mul_floor(total_psm_ceiling)
+				.mul_floor(info.max_debt)
 		}
 
-		/// Calculate total PSM debt across all approved assets.
-		pub(crate) fn total_psm_debt() -> BalanceOf<T> {
-			PsmDebt::<T>::iter_values()
+		/// Calculate total PSM debt across all approved externals of an instance.
+		pub(crate) fn total_psm_debt(internal_asset: &T::AssetId) -> BalanceOf<T> {
+			PsmDebt::<T>::iter_prefix_values(internal_asset)
 				.fold(BalanceOf::<T>::zero(), |acc, debt| acc.saturating_add(debt))
 		}
 
-		/// Check if an asset is approved for PSM swaps.
-		#[cfg(test)]
-		pub(crate) fn is_approved_asset(asset_id: &T::AssetId) -> bool {
-			ExternalAssets::<T>::contains_key(asset_id)
-		}
-
-		/// Get the reserve (balance) of an external asset held by PSM.
-		pub(crate) fn get_reserve(asset_id: T::AssetId) -> BalanceOf<T> {
-			T::Fungibles::balance(asset_id, &Self::account_id())
+		/// Get the reserve (balance) of an external asset held by a PSM.
+		pub(crate) fn get_reserve(
+			internal_asset: &T::AssetId,
+			asset_id: &T::AssetId,
+		) -> BalanceOf<T> {
+			T::Fungibles::balance(asset_id.clone(), &Self::psm_account(internal_asset))
 		}
 
 		/// Convert an amount denominated in external-asset units into internal units.
 		///
-		/// Scales by `10^(ext_decimals - internal_decimals)` — multiplies up when internal has more
-		/// decimals, floor-divides when it has fewer. Returns [`Error::ConversionOverflow`] if
-		/// the scaling factor or the product does not fit in the balance type.
+		/// Scales by `10^(ext_decimals - internal_decimals)` — multiplies up when internal has
+		/// more decimals, floor-divides when it has fewer. Returns [`Error::ConversionOverflow`]
+		/// if the scaling factor or the product does not fit in the balance type.
 		pub(crate) fn external_to_internal(
 			amount: BalanceOf<T>,
 			ext_decimals: u8,
@@ -1072,8 +1032,7 @@ pub mod pallet {
 
 		/// Convert an amount denominated in internal units into external-asset units.
 		///
-		/// Inverse of [`Self::external_to_internal`]. Floor-divides when internal has more
-		/// decimals, multiplies up when it has fewer.
+		/// Inverse of [`Self::external_to_internal`].
 		pub(crate) fn internal_to_external(
 			amount: BalanceOf<T>,
 			ext_decimals: u8,
@@ -1095,30 +1054,32 @@ pub mod pallet {
 			}
 		}
 
-		/// Compute `10^exp` as a [`BalanceOf`]. Returns [`Error::ConversionOverflow`] if the result
-		/// does not fit in `u128` or in `BalanceOf<T>`.
+		/// Compute `10^exp` as a [`BalanceOf`]. Returns [`Error::ConversionOverflow`] if the
+		/// result does not fit in `u128` or in `BalanceOf<T>`.
 		fn pow10(exp: u32) -> Result<BalanceOf<T>, Error<T>> {
 			let factor_u128 = 10u128.checked_pow(exp).ok_or(Error::<T>::ConversionOverflow)?;
 			factor_u128.try_into().map_err(|_| Error::<T>::ConversionOverflow)
 		}
 
 		/// Verify the live decimals for an external asset still match the snapshot taken at
-		/// registration, and that the internal asset's live decimals still match the genesis
-		/// snapshot.
+		/// registration, and that the internal asset's live decimals still match the snapshot
+		/// taken on instance install.
 		pub(crate) fn ensure_decimals_match(
-			asset_id: T::AssetId,
+			info: &PsmInfo<T>,
+			internal_asset: &T::AssetId,
+			asset_id: &T::AssetId,
 		) -> Result<(u8, u8), DispatchError> {
-			let ext_decimals =
-				ExternalDecimals::<T>::get(&asset_id).ok_or(Error::<T>::UnsupportedAsset)?;
-			ensure!(T::Fungibles::decimals(asset_id) == ext_decimals, Error::<T>::DecimalsMismatch);
-
-			let internal_decimals = InternalDecimals::<T>::get().ok_or(Error::<T>::Unexpected)?;
+			let ext_decimals = ExternalDecimals::<T>::get(internal_asset, asset_id)
+				.ok_or(Error::<T>::UnsupportedAsset)?;
 			ensure!(
-				T::InternalAsset::decimals() == internal_decimals,
+				T::Fungibles::decimals(asset_id.clone()) == ext_decimals,
 				Error::<T>::DecimalsMismatch
 			);
-
-			Ok((ext_decimals, internal_decimals))
+			ensure!(
+				T::Fungibles::decimals(internal_asset.clone()) == info.internal_decimals,
+				Error::<T>::DecimalsMismatch
+			);
+			Ok((ext_decimals, info.internal_decimals))
 		}
 
 		/// Ensure an account exists by incrementing its provider count if needed.
@@ -1132,60 +1093,72 @@ pub mod pallet {
 		pub(crate) fn do_try_state() -> Result<(), sp_runtime::TryRuntimeError> {
 			use sp_runtime::traits::CheckedAdd;
 
-			// Check 1: Live decimals must still match the snapshots taken at registration/genesis —
-			// both for the internal asset and every approved external asset.
-			let internal_decimals_snapshot =
-				InternalDecimals::<T>::get().ok_or("InternalDecimals not initialized")?;
-			ensure!(
-				T::InternalAsset::decimals() == internal_decimals_snapshot,
-				"Internal asset live decimals differ from the genesis snapshot"
-			);
-			for (asset_id, _) in ExternalAssets::<T>::iter() {
-				let snapshot = ExternalDecimals::<T>::get(&asset_id)
-					.ok_or("Approved external asset missing decimals snapshot")?;
+			for (internal_asset, info) in Psms::<T>::iter() {
+				// 1. Live internal decimals must still match the snapshot.
 				ensure!(
-					T::Fungibles::decimals(asset_id) == snapshot,
-					"External asset live decimals differ from the registration snapshot"
+					T::Fungibles::decimals(internal_asset.clone()) == info.internal_decimals,
+					"Internal asset live decimals differ from the snapshot"
 				);
-			}
 
-			// Check 2: Per-asset reserve (in external units) must be >= the external equivalent of
-			// the tracked internal debt. Donated reserves may make it strictly greater.
-			for (asset_id, _) in ExternalAssets::<T>::iter() {
-				let debt = PsmDebt::<T>::get(&asset_id);
-				let reserve = Self::get_reserve(asset_id.clone());
-				let ext_decimals = ExternalDecimals::<T>::get(&asset_id)
-					.ok_or("Approved external asset missing decimals snapshot")?;
-				let debt_as_external =
-					Self::internal_to_external(debt, ext_decimals, internal_decimals_snapshot)
-						.map_err(|_| "Failed to convert tracked debt to external units")?;
-				ensure!(
-					reserve >= debt_as_external,
-					"PSM reserve is less than tracked debt for an asset"
-				);
-			}
+				// 2. External decimals snapshots must match live decimals.
+				let mut counted = 0u32;
+				for (asset_id, _) in ExternalAssets::<T>::iter_prefix(&internal_asset) {
+					let snapshot = ExternalDecimals::<T>::get(&internal_asset, &asset_id)
+						.ok_or("Approved external asset missing decimals snapshot")?;
+					ensure!(
+						T::Fungibles::decimals(asset_id.clone()) == snapshot,
+						"External asset live decimals differ from the registration snapshot"
+					);
+					counted = counted.saturating_add(1);
 
-			// Check 3: Computed total PSM debt must equal sum of per-asset debts.
-			let mut sum = BalanceOf::<T>::zero();
-			for (asset_id, _) in ExternalAssets::<T>::iter() {
-				sum = sum
-					.checked_add(&PsmDebt::<T>::get(&asset_id))
-					.ok_or("PSM debt overflow when summing per-asset debts")?;
-			}
-			ensure!(
-				Self::total_psm_debt() == sum,
-				"total_psm_debt() does not match sum of per-asset debts"
-			);
-
-			// Check 4: Per-asset debt should not exceed its ceiling.
-			// (May be transiently violated if governance lowers ceilings, but
-			// should hold under normal operation.)
-			for (asset_id, status) in ExternalAssets::<T>::iter() {
-				if status.allows_minting() {
-					let debt = PsmDebt::<T>::get(&asset_id);
-					let ceiling = Self::max_asset_debt(asset_id);
-					ensure!(debt <= ceiling, "Per-asset PSM debt exceeds its ceiling");
+					// 3. Per-asset reserve covers tracked debt.
+					let debt = PsmDebt::<T>::get(&internal_asset, &asset_id);
+					let reserve = Self::get_reserve(&internal_asset, &asset_id);
+					let debt_as_external = Self::internal_to_external(
+						debt,
+						snapshot,
+						info.internal_decimals,
+					)
+					.map_err(|_| "Failed to convert tracked debt to external units")?;
+					ensure!(
+						reserve >= debt_as_external,
+						"PSM reserve is less than tracked debt for an asset"
+					);
 				}
+
+				// 4. Cached `external_count` matches the number of approved externals.
+				ensure!(
+					info.external_count == counted,
+					"PsmInfo.external_count does not match the approved externals"
+				);
+
+				// 5. Sum of per-asset debts equals total_psm_debt (defined to be the same;
+				// guards against refactoring drift).
+				let mut sum = BalanceOf::<T>::zero();
+				for (_, debt) in PsmDebt::<T>::iter_prefix(&internal_asset) {
+					sum = sum.checked_add(&debt).ok_or("PSM debt overflow when summing")?;
+				}
+				ensure!(
+					sum == Self::total_psm_debt(&internal_asset),
+					"sum of per-asset debts disagrees with total_psm_debt"
+				);
+
+				// 6. Per-asset debt within its ceiling when minting is enabled.
+				for (asset_id, status) in ExternalAssets::<T>::iter_prefix(&internal_asset) {
+					if status.allows_minting() {
+						let debt = PsmDebt::<T>::get(&internal_asset, &asset_id);
+						let ceiling = Self::max_asset_debt(&internal_asset, &asset_id, &info);
+						ensure!(debt <= ceiling, "Per-asset PSM debt exceeds its ceiling");
+					}
+				}
+			}
+
+			// 7. No orphaned per-asset state outside of registered PSMs.
+			for (internal_asset, _, _) in ExternalAssets::<T>::iter() {
+				ensure!(
+					Psms::<T>::contains_key(&internal_asset),
+					"Orphaned ExternalAssets row without parent PSM"
+				);
 			}
 
 			Ok(())
@@ -1194,9 +1167,10 @@ pub mod pallet {
 }
 
 impl<T: pallet::Config> PsmInterface for pallet::Pallet<T> {
+	type AssetId = T::AssetId;
 	type Balance = pallet::BalanceOf<T>;
 
-	fn reserved_capacity() -> Self::Balance {
-		Self::max_psm_debt()
+	fn reserved_capacity(asset: Self::AssetId) -> Self::Balance {
+		pallet::Psms::<T>::get(asset).map(|p| p.max_debt).unwrap_or_default()
 	}
 }

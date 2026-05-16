@@ -48,14 +48,8 @@ pub const DAI_UNIT: u128 = 1_000_000_000_000_000_000;
 
 // Initial balances for testing
 pub const INITIAL_BALANCE: u128 = 1_000_000 * INTERNAL_UNIT; // 1M units
-
-parameter_types! {
-	pub static MockMaximumIssuance: u128 = 10_000_000 * INTERNAL_UNIT;
-}
-
-pub fn set_mock_maximum_issuance(value: u128) {
-	MockMaximumIssuance::set(value);
-}
+/// Default per-PSM debt ceiling for the test instance.
+pub const DEFAULT_MAX_DEBT: u128 = 10_000_000 * INTERNAL_UNIT;
 
 #[frame_support::runtime]
 mod test_runtime {
@@ -112,8 +106,6 @@ impl pallet_assets::Config for Test {
 }
 
 parameter_types! {
-	pub const InternalAssetId: u32 = INTERNAL_ASSET_ID;
-	pub const InsuranceFundAccount: u64 = INSURANCE_FUND;
 	pub const MinSwapAmount: u128 = 100 * INTERNAL_UNIT;
 	pub const PsmPalletId: PalletId = PalletId(*b"py/psm!!");
 }
@@ -170,14 +162,11 @@ impl crate::BenchmarkHelper<u32, u64> for PsmBenchmarkHelper {
 impl crate::Config for Test {
 	type Fungibles = Assets;
 	type AssetId = u32;
-	type MaximumIssuance = MockMaximumIssuance;
 	type ManagerOrigin = MockManagerOrigin;
 	type WeightInfo = ();
-	type InternalAsset = frame_support::traits::fungible::ItemOf<Assets, InternalAssetId, u64>;
-	type FeeDestination = InsuranceFundAccount;
 	type PalletId = PsmPalletId;
 	type MinSwapAmount = MinSwapAmount;
-	type MaxExternalAssets = ConstU32<10>;
+	type MaxExternalAssetsPerPsm = ConstU32<10>;
 	#[cfg(feature = "runtime-benchmarks")]
 	type BenchmarkHelper = PsmBenchmarkHelper;
 }
@@ -228,19 +217,23 @@ pub fn new_test_ext() -> TestState {
 	.unwrap();
 
 	crate::GenesisConfig::<Test> {
-		max_psm_debt_of_total: Permill::from_percent(50),
-		asset_configs: [
+		psms: vec![(INTERNAL_ASSET_ID, INSURANCE_FUND, DEFAULT_MAX_DEBT)],
+		externals: vec![
 			(
+				INTERNAL_ASSET_ID,
 				USDC_ASSET_ID,
-				(Permill::from_percent(1), Permill::from_percent(1), Permill::from_percent(60)),
+				Permill::from_percent(1),
+				Permill::from_percent(1),
+				Permill::from_percent(60),
 			),
 			(
+				INTERNAL_ASSET_ID,
 				USDT_ASSET_ID,
-				(Permill::from_percent(1), Permill::from_percent(1), Permill::from_percent(40)),
+				Permill::from_percent(1),
+				Permill::from_percent(1),
+				Permill::from_percent(40),
 			),
-		]
-		.into_iter()
-		.collect(),
+		],
 		_marker: Default::default(),
 	}
 	.assimilate_storage(&mut storage)
@@ -250,7 +243,6 @@ pub fn new_test_ext() -> TestState {
 
 	ext.execute_with(|| {
 		System::set_block_number(1);
-		set_mock_maximum_issuance(20_000_000 * INTERNAL_UNIT);
 	});
 
 	ext
@@ -283,6 +275,7 @@ impl ExtBuilder {
 			for (who, asset_id, amount) in self.mint_ops {
 				frame_support::assert_ok!(crate::Pallet::<Test>::mint(
 					RuntimeOrigin::signed(who),
+					INTERNAL_ASSET_ID,
 					asset_id,
 					amount,
 				));
@@ -294,32 +287,41 @@ impl ExtBuilder {
 }
 
 pub fn set_minting_fee(asset_id: u32, fee: Permill) {
-	crate::MintingFee::<Test>::insert(asset_id, fee);
+	crate::MintingFee::<Test>::insert(INTERNAL_ASSET_ID, asset_id, fee);
 }
 
 pub fn set_redemption_fee(asset_id: u32, fee: Permill) {
-	crate::RedemptionFee::<Test>::insert(asset_id, fee);
+	crate::RedemptionFee::<Test>::insert(INTERNAL_ASSET_ID, asset_id, fee);
 }
 
-pub fn set_max_psm_debt_ratio(ratio: Permill) {
-	crate::MaxPsmDebtOfTotal::<Test>::put(ratio);
+pub fn set_max_debt(value: u128) {
+	crate::Psms::<Test>::mutate(INTERNAL_ASSET_ID, |maybe| {
+		if let Some(info) = maybe.as_mut() {
+			info.max_debt = value;
+		}
+	});
 }
 
 pub fn set_asset_ceiling_weight(asset_id: u32, weight: Permill) {
-	crate::AssetCeilingWeight::<Test>::insert(asset_id, weight);
+	crate::AssetCeilingWeight::<Test>::insert(INTERNAL_ASSET_ID, asset_id, weight);
 }
 
 pub fn set_asset_status(asset_id: u32, status: crate::CircuitBreakerLevel) {
-	crate::ExternalAssets::<Test>::insert(asset_id, status);
+	crate::ExternalAssets::<Test>::insert(INTERNAL_ASSET_ID, asset_id, status);
 }
 
 /// Register an external asset via the extrinsic (records snapshot decimals) and
 /// assign it a per-asset ceiling weight.
 pub fn register_external_asset_with_weight(asset_id: u32, weight: Permill) {
 	use frame_support::assert_ok;
-	assert_ok!(crate::Pallet::<Test>::add_external_asset(RuntimeOrigin::root(), asset_id));
+	assert_ok!(crate::Pallet::<Test>::add_external_asset(
+		RuntimeOrigin::root(),
+		INTERNAL_ASSET_ID,
+		asset_id,
+	));
 	assert_ok!(crate::Pallet::<Test>::set_asset_ceiling_weight(
 		RuntimeOrigin::root(),
+		INTERNAL_ASSET_ID,
 		asset_id,
 		weight,
 	));
@@ -352,5 +354,14 @@ pub fn get_asset_balance(asset_id: u32, account: u64) -> u128 {
 }
 
 pub fn psm_account() -> u64 {
-	crate::Pallet::<Test>::account_id()
+	crate::Pallet::<Test>::psm_account(&INTERNAL_ASSET_ID)
+}
+
+pub fn is_approved_asset(asset_id: u32) -> bool {
+	crate::ExternalAssets::<Test>::contains_key(INTERNAL_ASSET_ID, asset_id)
+}
+
+pub fn psm_max_asset_debt(asset_id: u32) -> u128 {
+	let info = crate::Psms::<Test>::get(INTERNAL_ASSET_ID).expect("PSM exists");
+	crate::Pallet::<Test>::max_asset_debt(&INTERNAL_ASSET_ID, &asset_id, &info)
 }

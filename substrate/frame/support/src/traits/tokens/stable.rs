@@ -17,22 +17,27 @@
 
 //! Traits for stablecoin inter-pallet communication.
 
-/// Trait exposing the PSM pallet's reserved capacity to other pallets.
+/// Trait exposing PSM-reserved minting capacity to other pallets, scoped to a specific
+/// internal asset.
 ///
-/// Implemented by the PSM pallet, used by the Vaults pallet to account for
-/// PSM-reserved debt ceiling when calculating available vault capacity.
+/// Implemented by the PSM pallet, used by the Vaults pallet to account for PSM-reserved
+/// debt ceiling when calculating available vault capacity per stablecoin.
 pub trait PsmInterface {
+	/// Asset identifier type used by the underlying fungibles backend.
+	type AssetId;
 	/// The balance type.
 	type Balance;
 
-	/// Get the amount of internal/minting stablecoin issuance capacity reserved by the PSM.
-	fn reserved_capacity() -> Self::Balance;
+	/// Get the amount of issuance capacity reserved by the PSM for `asset`. Zero if no PSM is
+	/// registered for `asset`.
+	fn reserved_capacity(asset: Self::AssetId) -> Self::Balance;
 }
 
 impl PsmInterface for () {
+	type AssetId = ();
 	type Balance = u128;
 
-	fn reserved_capacity() -> Self::Balance {
+	fn reserved_capacity(_asset: Self::AssetId) -> Self::Balance {
 		0
 	}
 }
